@@ -101,7 +101,7 @@ class Setup:
                 sys.exit(1)
 
     def setup_openwakeword_models(self) -> None:
-        """Download openWakeWord base models and check for custom hey_kermit model."""
+        """Download openWakeWord base models and install custom hey_kermit model."""
         try:
             import openwakeword
             openwakeword.utils.download_models()
@@ -110,13 +110,15 @@ class Setup:
             print(f"Failed to download openWakeWord models: {e}")
             sys.exit(1)
 
-        # Check for custom hey_kermit model
+        # Copy custom hey_kermit model into the openwakeword resources folder
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        src = os.path.join(script_dir, "models", "hey_ker_mit.onnx")
+        src = os.path.join(script_dir, "lib", "openwakeword", "hey_ker_mit.onnx")
+        dst = "/usr/local/lib/python3.10/dist-packages/openwakeword/resources/models/hey_ker_mit.onnx"
         if os.path.exists(src):
-            print("hey_ker_mit.onnx found in models/.")
+            subprocess.check_call(["sudo", "cp", src, dst])
+            print("hey_ker_mit.onnx installed to openwakeword models folder.")
         else:
-            print("WARNING: hey_ker_mit.onnx not found in models/ — copy it there manually.")
+            print("WARNING: hey_ker_mit.onnx not found in lib/openwakeword/ — copy it there manually.")
 
     def setup_bashrc(self) -> None:
         """Add required environment variables to ~/.bashrc if not already present."""
