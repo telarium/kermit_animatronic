@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Kermit - override standard ignores for whisper binaries
+!lib/
+!lib/**
+!build/
+!*.so
