@@ -158,11 +158,11 @@ class Pasqually:
 		self.movements.set_mirrored(new_mirror_mode)
 
 	def on_connect_to_wifi_network(self, ssid: str, password: any = None) -> None:
-		print("TODO")
+		print("TODO CONNECT TO WIFI")
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
-		print("TODO")
+		print("TODO TTS EVENT")
 
 
 if __name__ == "__main__":
