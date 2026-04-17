@@ -1,84 +1,116 @@
 #!/usr/bin/env python3
-
 import os
 import sys
 import subprocess
 from typing import List
 
-
 class Setup:
-	def __init__(self) -> None:
-		# List of system packages to install (from apt)
-		packages: List[str] = [
-			"git", "build-essential", "python3-dev", "flex", "bison", "mpv", "hostapd", "dnsmasq",
-			"python3-smbus", "python3-evdev", "python3-setuptools", "python3-mido",
-			"python3-flask", "python3-flask-socketio", "python3-pip",
-			"python3-psutil", "python3-pydispatch", "python3-pygame", "iw",
-			"iproute2"
-		]
+    def __init__(self) -> None:
+        # List of system packages to install (from apt)
+        packages: List[str] = [
+            "git", "build-essential", "python3-dev", "flex", "bison", "mpv", "hostapd", "dnsmasq",
+            "python3-smbus", "python3-evdev", "python3-setuptools", "python3-mido",
+            "python3-flask", "python3-flask-socketio", "python3-pip",
+            "python3-psutil", "python3-pydispatch", "python3-pygame", "iw",
+            "iproute2",
+            # ALSA audio
+            "alsa-utils", "portaudio19-dev", "ffmpeg",
+        ]
+        self._run_command("sudo apt update")
+        self.install_packages(packages)
+        self.install_python_packages([
+            "pvporcupine", "pvrhino", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
+            "pywifi", "flask-talisman", "requests",
+            # whisper/STT
+            "pyaudio", "numpy",
+        ])
+        self.setup_piper_models()
+        self.setup_whisper_models()
+        self.setup_bashrc()
 
-		self._run_command("sudo apt update")
+    def install_packages(self, packages: List[str]) -> None:
+        try:
+            subprocess.check_call(["sudo", "apt", "install", "-y"] + packages)
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to install packages: {e}")
+            sys.exit(1)
 
-		# Install system packages using subprocess and handle potential errors
-		self.install_packages(packages)
+    def install_python_packages(self, packages: List[str]) -> None:
+        subprocess.check_call(["sudo", "/usr/bin/python", "-m", "pip", "install", "--upgrade", "pip"])
+        try:
+            for package in packages:
+                subprocess.check_call(
+                    ["sudo", sys.executable, "-m", "pip", "install", "--break-system-packages", package]
+                )
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to install Python packages: {e}")
+            sys.exit(1)
 
-		# Install Python dependencies via pip with --break-system-packages
-		self.install_python_packages([
-			"pvporcupine", "pvrhino", "pydub", "scipy", "openai", "elevenlabs", "piper-tts", "pywifi", "flask-talisman", "requests"
-		])
+    def setup_piper_models(self) -> None:
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            subprocess.check_call([
+                "wget", "-O", os.path.join(script_dir, "en_US-ryan-low.onnx"),
+                "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx?download=true"
+            ])
+            subprocess.check_call([
+                "wget", "-O", os.path.join(script_dir, "en_US-ryan-low.json"),
+                "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx.json?download=true"
+            ])
+            print(f"Piper TTS models are available in {script_dir}.")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to set up Piper models: {e}")
+            sys.exit(1)
 
-		# Set up Piper TTS models
-		self.setup_piper_models()
+    def setup_whisper_models(self) -> None:
+        """Download whisper ggml models into lib/whisper/models/."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        whisper_dir = os.path.join(script_dir, "lib", "whisper")
+        models_dir  = os.path.join(whisper_dir, "models")
+        download_script = os.path.join(models_dir, "download-ggml-model.sh")
 
-	def install_packages(self, packages: List[str]) -> None:
-		try:
-			# Install packages using apt
-			subprocess.check_call(["sudo", "apt", "install", "-y"] + packages)
-		except subprocess.CalledProcessError as e:
-			print(f"Failed to install packages: {e}")
-			sys.exit(1)
+        if not os.path.isdir(whisper_dir):
+            print("lib/whisper not found - skipping model download.")
+            return
 
-	def install_python_packages(self, packages: List[str]) -> None:
-		subprocess.check_call(["sudo", "/usr/bin/python", "-m", "pip", "install", "--upgrade", "pip"])
-		try:
-			for package in packages:
-				# Use pip with --break-system-packages flag to allow installation
-				subprocess.check_call(
-					["sudo", sys.executable, "-m", "pip", "install", "--break-system-packages", package]
-				)
-		except subprocess.CalledProcessError as e:
-			print(f"Failed to install Python packages: {e}")
-			sys.exit(1)
+        for model in ["tiny.en", "base.en"]:
+            model_file = os.path.join(models_dir, f"ggml-{model}.bin")
+            if os.path.exists(model_file):
+                print(f"Model {model} already present, skipping.")
+                continue
+            print(f"Downloading whisper model: {model}")
+            try:
+                subprocess.check_call(
+                    ["bash", download_script, model],
+                    cwd=whisper_dir
+                )
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to download whisper model {model}: {e}")
+                sys.exit(1)
 
-	def setup_piper_models(self) -> None:
-		try:
-			# Get the directory of the current script
-			script_dir = os.path.dirname(os.path.abspath(__file__))
+    def setup_bashrc(self) -> None:
+        """Add required environment variables to ~/.bashrc if not already present."""
+        bashrc = os.path.expanduser("~/.bashrc")
+        exports = [
+            "export PATH=/usr/local/cuda/bin:$PATH",
+            "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH",
+            "export PYTHONPATH=/home/kermit/.local/lib/python3.10/site-packages:$PYTHONPATH",
+        ]
+        with open(bashrc, "r") as f:
+            current = f.read()
+        with open(bashrc, "a") as f:
+            for line in exports:
+                if line not in current:
+                    f.write(f"\n{line}")
+                    print(f"Added to .bashrc: {line}")
+        print("bashrc updated. Run 'source ~/.bashrc' or re-login to apply.")
 
-			# Download Ryan Low voice model into the script's directory
-			subprocess.check_call([
-				"wget",
-				"-O", os.path.join(script_dir, "en_US-ryan-low.onnx"),
-				"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx?download=true"
-			])
-			subprocess.check_call([
-				"wget",
-				"-O", os.path.join(script_dir, "en_US-ryan-low.json"),
-				"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx.json?download=true"
-			])
-
-			print(f"Piper TTS models are available in {script_dir}.")
-		except subprocess.CalledProcessError as e:
-			print(f"Failed to set up Piper models: {e}")
-			sys.exit(1)
-
-	def _run_command(self, command: str) -> None:
-		try:
-			subprocess.check_call(command, shell=True)
-		except subprocess.CalledProcessError as e:
-			print(f"Command failed: {command}\nError: {e}")
-			sys.exit(1)
-
+    def _run_command(self, command: str) -> None:
+        try:
+            subprocess.check_call(command, shell=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Command failed: {command}\nError: {e}")
+            sys.exit(1)
 
 if __name__ == "__main__":
-	Setup()
+    Setup()
