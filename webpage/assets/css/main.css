@@ -1,0 +1,721 @@
+@charset "UTF-8";
+
+/* CSS Reset */
+html, body, div, span, applet, object, iframe,
+h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+a, abbr, acronym, address, big, cite, code,
+del, dfn, em, img, ins, kbd, q, s, samp,
+small, strike, strong, sub, sup, tt, var,
+b, u, i, center, dl, dt, dd, ol, ul, li,
+fieldset, form, label, legend, table, caption,
+tbody, tfoot, thead, tr, th, td, article,
+aside, canvas, details, embed, figure,
+figcaption, footer, header, hgroup, menu,
+nav, section, summary, time, mark, audio, video {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font-size: 100%;
+    font: inherit;
+    vertical-align: baseline;
+}
+
+article, aside, details, figcaption, figure,
+footer, header, hgroup, menu, nav, section {
+    display: block;
+}
+
+body {
+    line-height: 1;
+    -webkit-text-size-adjust: none;
+    -ms-overflow-style: scrollbar;
+    background: #43930e;
+}
+
+ol, ul {
+    list-style: none;
+}
+
+blockquote, q {
+    quotes: none;
+}
+
+blockquote:before, blockquote:after,
+q:before, q:after {
+    content: '';
+    content: none;
+}
+
+table {
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+*, *:before, *:after {
+    box-sizing: border-box;
+}
+
+body.is-loading *, body.is-loading *:before, body.is-loading *:after {
+    animation: none !important;
+    transition: none !important;
+}
+
+body, input, select, textarea {
+    color: rgba(255, 255, 255, 1);
+    font-family: sans-serif;
+    font-size: 12pt;
+    font-weight: 600;
+    line-height: 1.65;
+}
+
+a {
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    color: rgba(255, 255, 255, 0.75);
+    text-decoration: none;
+    border-bottom: 1px dotted;
+    outline: 0;
+}
+
+a:hover {
+    color: #FFF;
+    border: none;
+}
+
+strong, b {
+    color: #fff;
+    font-weight: 400;
+}
+
+em, i {
+    font-style: italic;
+}
+
+p {
+    margin: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: #fff;
+    font-weight: 400;
+    line-height: 1.5;
+    margin: 0 0 1em 0;
+}
+
+h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+    color: inherit;
+    text-decoration: none;
+}
+
+h2 {
+    font-size: 1.75em;
+}
+
+h3 {
+    font-size: 1.35em;
+}
+
+h4 {
+    font-size: 1.1em;
+}
+
+h5 {
+    font-size: 0.9em;
+}
+
+h6 {
+    font-size: 0.7em;
+}
+
+blockquote {
+    border-left: solid 4px rgba(144, 144, 144, 0.25);
+    font-style: italic;
+    margin: 0 0 2em 0;
+    padding: 0.5em 0 0.5em 2em;
+}
+
+code {
+    background: rgba(144, 144, 144, 0.075);
+    border-radius: 4px;
+    border: solid 1px rgba(144, 144, 144, 0.25);
+    font-family: monospace; /* Replaced "Courier New" with default system monospace */
+    font-size: 0.9em;
+    margin: 0 0.25em;
+    padding: 0.25em 0.65em;
+}
+
+pre {
+    overflow-x: auto;
+    font-family: monospace; /* Replaced "Courier New" with default system monospace */
+    font-size: 0.9em;
+    margin: 0 0 2em 0;
+}
+
+pre code {
+    display: block;
+    line-height: 1.75;
+    padding: 1em 1.5em;
+    overflow-x: auto;
+}
+
+hr {
+    border: 0;
+    border-bottom: solid 1px rgba(144, 144, 144, 0.25);
+    margin: 2em 0;
+}
+
+.thumbnails {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: nowrap;
+}
+
+.thumbnails .box {
+    margin: 0 1em;
+    flex: 0 0 auto;
+}
+
+.thumbnails .box:nth-child(1),
+.thumbnails .box:nth-child(3) {
+    width: 315px;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.thumbnails .box:nth-child(2) {
+    flex: 1 1 200px;
+    max-width: 300px;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.box {
+    border-radius: 4px;
+    margin-bottom: 0.3em !important;
+    background: #24160b;
+    text-align: center;
+    opacity: 0.9;
+    z-index: 2;
+}
+
+.box > :last-child,
+.box > :last-child > :last-child,
+.box > :last-child > :last-child > :last-child {
+    margin-bottom: 0;
+}
+
+.box .image.keypad {
+    margin: 0;
+    padding: 0;
+    width: 275px;
+    max-width: none;
+}
+
+.box .image.keypad img {
+    width: 275px;
+    height: auto;
+    display: block;
+}
+
+.box .inner {
+    padding: 1.5em;
+    width: 100% !important;
+}
+
+@media screen and (max-width: 480px) {
+    .box .inner {
+        padding: 1em;
+    }
+}
+
+.image {
+    border-radius: 4px;
+    border: 0;
+    display: inline-block;
+    position: relative;
+}
+
+.image img {
+    border-radius: 4px;
+    display: block;
+}
+
+.image.fit img {
+    width: 100%;
+}
+
+.image.main {
+    display: block;
+    margin: 0 0 3em 0;
+    width: 100%;
+}
+
+.image.main img {
+    width: 100%;
+}
+
+form {
+    margin: 0;
+}
+
+label {
+    color: #fff;
+    display: block;
+    font-size: 0.9em;
+    font-weight: 400;
+    margin: 0 0 1em 0;
+}
+
+select {
+    appearance: none;
+    background: rgba(144, 144, 144, 0.8);
+    border-radius: 4px;
+    border: solid 1px rgba(255, 255, 255, 0.25);
+    color: inherit;
+    display: block;
+    outline: 0;
+    padding: 0 1em;
+    text-decoration: none;
+    width: 100%;
+    height: 2.75em;
+}
+
+input[type="submit"],
+input[type="reset"],
+input[type="button"],
+button,
+.button {
+    appearance: none;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    background-color: #7a4135;
+    border-radius: 4px;
+    border: 0;
+    color: #ffffff !important;
+    cursor: pointer;
+    display: inline-block;
+    font-weight: 400;
+    height: 2.85em;
+    line-height: 2.85em;
+    padding: 0 1.5em;
+    text-align: center;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+input[type="submit"]:hover,
+input[type="reset"]:hover,
+input[type="button"]:hover,
+button:hover,
+.button:hover {
+    background-color: #b8835b;
+}
+
+input[type="submit"]:active,
+input[type="reset"]:active,
+input[type="button"]:active,
+button:active,
+.button:active {
+    background-color: #783c3b;
+}
+
+input[type="submit"].fit,
+input[type="reset"].fit,
+input[type="button"].fit,
+button.fit,
+.button.fit {
+    display: block;
+    margin: 0 0 1em 0;
+    width: 100%;
+}
+
+input[type="submit"].disabled, input[type="submit"]:disabled,
+input[type="reset"].disabled,
+input[type="reset"]:disabled,
+input[type="button"].disabled,
+input[type="button"]:disabled,
+button.disabled,
+button:disabled,
+.button.disabled,
+.button:disabled {
+    background-color: rgba(255, 255, 255, 0.75) !important;
+    box-shadow: inset 0 -0.15em 0 0 rgba(0, 0, 0, 0.15);
+    color: #000000 !important;
+    cursor: default;
+    opacity: 0.25;
+}
+
+@media screen and (max-width: 480px) {
+    input[type="submit"],
+    input[type="reset"],
+    input[type="button"],
+    button,
+    .button {
+        padding: 0;
+    }
+}
+
+#banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background-color: rgba(0, 0, 0, 0);
+    border-top: 0;
+    position: relative;
+    text-align: center;
+    overflow: visible;
+    z-index: -5;
+}
+
+#banner .inner {
+    text-align: center;
+    position: relative;
+    z-index: 2;
+}
+
+#banner p {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 1.5em;
+    font-weight: 300;
+}
+
+#banner img {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: auto;
+    height: auto;
+    min-width: 1200px;
+    max-width: 1200px;
+    opacity: 0.8;
+    z-index: -5;
+}
+
+#banner a {
+    color: rgba(255, 255, 255, 0.75);
+    text-decoration: none;
+    border-bottom: 1px dotted;
+}
+
+#banner a:hover {
+    color: #FFF;
+    border: none;
+}
+
+#banner video {
+    position: fixed;
+    top: 0px;
+    right: 0px;
+    width: 100%;
+    height: auto;
+    opacity: 0.8;
+    overflow: hidden;
+}
+
+#main {
+    padding: 2em 0 0.3em 0;
+}
+
+#main .inner {
+    width: 100%;
+    max-width: 80em;
+    margin: 0 auto;
+    padding-bottom: 0.3em;
+}
+
+.voice-command-status {
+    width: 930px;
+    max-width: 930px;
+    margin: 2em auto 0.3em auto;
+    padding: 0.75em;
+    background: #24160b;
+    border-radius: 4px;
+    text-align: center;
+    opacity: 0.9;
+    z-index: 2;
+}
+
+.voice-command-status p {
+    margin: 0 0 0.3em 0;
+    font-size: 0.9em;
+}
+
+#footer {
+    padding: 1em 0 0em 0;
+    background-color: rgba(0, 0, 0, 0);
+    text-align: center;
+    margin-top: 0;
+}
+
+#footer .inner {
+    width: 50%;
+    margin: 0 auto 0.5em auto;
+}
+
+@media screen and (max-width: 480px) {
+    .thumbnails {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .thumbnails .box {
+        width: 100%;
+        max-width: none;
+        margin: 1em 0;
+    }
+
+    .thumbnails .box:nth-child(1),
+    .thumbnails .box:nth-child(3) {
+        width: 275px;
+    }
+
+    .thumbnails .box:nth-child(2) {
+        max-width: 90%;
+    }
+
+    #footer .inner {
+        width: 90%;
+    }
+
+    #banner img {
+        width: 80%;
+        height: auto;
+    }
+
+    .voice-command-status {
+        width: 275px;
+        max-width: 275px;
+        padding: 0.5em;
+        margin: 1.5em auto 0 auto;
+    }
+
+    .voice-command-status p {
+        font-size: 0.75em;
+    }
+
+    #ttsInputContainer {
+        flex-direction: column;
+        gap: 0.5em;
+        width: 100%;
+    }
+
+    #ttsInput {
+        width: 100%;
+    }
+
+    #submitTTSButton {
+        width: 100%;
+    }
+
+    .voice-command-status p {
+        margin: 0 0 0.3em 0;
+    }
+}
+
+@keyframes flip-animation {
+    from {
+        transform: scaleX(1);
+    }
+    50% {
+        transform: scaleX(-1);
+    }
+    to {
+        transform: scaleX(1);
+    }
+}
+
+.flip-animation {
+    animation: flip-animation 1s ease-in-out;
+}
+
+.mode-toggle {
+    display: flex;
+    justify-content: center; /* Center the checkboxes and labels */
+    align-items: center; /* Vertically align the checkboxes with labels */
+    margin: 0.5em 0; /* Add consistent vertical spacing */
+    gap: 0.5em; /* Reduce horizontal spacing between checkboxes */
+}
+
+/* Control spacing between the checkbox and its label text */
+.mode-toggle label {
+    display: inline-flex;
+    align-items: center; /* Align text and checkbox vertically */
+    margin: 0; /* Remove extra margin */
+}
+
+.mode-toggle input[type="checkbox"] {
+    margin-right: 0.25em; /* Minimal spacing between checkbox and text */
+    width: 1em; /* Adjust checkbox size */
+    height: 1em; /* Adjust checkbox size */
+}
+
+/* --- WiFi Selection Popup Styles --- */
+
+.popup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.popup-content {
+    background-color: #24160b;
+    padding: 25px 20px 20px 20px; /* Adjusted top padding to prevent overlap */
+    border-radius: 4px;
+    width: 90%;
+    max-width: 400px;
+    position: relative;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.close-button {
+    position: absolute;
+    top: 15px; /* Adjusted from 10px to 15px */
+    right: 20px; /* Adjusted from 15px to 20px */
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.2em; /* Reduced from 1.5em to 1.2em */
+    cursor: pointer;
+    padding: 5px; /* Added padding to increase clickable area */
+    line-height: 1; /* Centers the close symbol vertically */
+}
+
+.popup-content h2 {
+    color: #fff;
+    margin: 0 0 15px 0; /* Ensures no top margin */
+    text-align: center;
+    padding-top: 10px; /* Adds space between the top and the heading */
+}
+
+.wifi-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 10px;
+    background-color: #2d2b20;
+}
+
+.wifi-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 5px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.wifi-item:last-child {
+    border-bottom: none;
+}
+
+.wifi-item:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.wifi-connect label {
+    color: #fff;
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 400;
+}
+
+.wifi-connect input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+#wifiPassword {
+    color: #000;
+}
+
+#connectWifiButton {
+    width: 100%;
+}
+
+/* --- Hotspot Hyperlink Styles --- */
+
+.hotspot-link-container {
+    margin-top: 15px; /* Existing margin */
+    text-align: center; /* Centers the hyperlink horizontally */
+}
+
+.hotspot-link-container a {
+    color: rgba(255, 255, 255, 0.75);
+    text-decoration: none;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: color 0.2s ease-in-out;
+}
+
+.hotspot-link-container a:hover {
+    color: #FFF;
+    text-decoration: underline; /* Optional: Adds underline on hover */
+}
+
+@media screen and (max-width: 480px) {
+    .popup-content {
+        width: 95%;
+        padding: 15px; /* Adjusted padding for smaller screens */
+    }
+
+    .wifi-list {
+        max-height: 150px;
+    }
+}
+
+button.disabled,
+button:disabled,
+#submitTTSButton.disabled,
+#submitTTSButton:disabled {
+    background-color: rgba(255, 255, 255, 0.75) !important;
+    box-shadow: inset 0 -0.15em 0 0 rgba(0, 0, 0, 0.15);
+    color: #000000 !important;
+    cursor: default;
+    opacity: 0.25;
+}
+
+#submitTTSButton {
+    height: 2.85em;
+    line-height: 2.85em;
+}
+
+.voice-command-status p span {
+    color: #f36446;
+    font-weight: bold;
+}
+
+#ttsInputContainer {
+    margin-top: 1em;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5em;
+}
+
+#ttsInput {
+    width: 70%;
+    padding: 0.5em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1em;
+    color: #000;
+}

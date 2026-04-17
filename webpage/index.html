@@ -1,0 +1,106 @@
+<!DOCTYPE HTML>
+<!--
+    Kermit the Frog Animatronic Restoration Project by Andrew Langley
+    HTML design based on "Full Motion" by TEMPLATED
+    Released for free under the Creative Commons Attribution 3.0 license (templated.co/license)
+-->
+<html>
+    <head>
+        <title>Hi Ho! Kermit the Frog, here!</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="stylesheet" href="assets/css/main.css" />
+    </head>
+    <body id="top">
+
+        <section id="banner">
+            <img src="images/kermit_bg.jpg" alt="Kermit" />
+        </section>
+
+        <!-- Main -->
+        <div id="main">
+            <div class="inner">
+
+                <!-- Boxes -->
+                <div class="thumbnails">
+
+                    <div class="box">
+                        <img class="image keypad" src="images/keypad-l.png" alt="Left Keypad" />
+                    </div>
+
+                    <div class="box">
+                        <div class="inner">
+                            <div class="mode-toggle">
+                                <label for="mirroredModeCheckbox">
+                                    <input type="checkbox" id="mirroredModeCheckbox" title="Swap animations on the right and left sides of the animatronic" />
+                                    Enable Mirrored Mode
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="box">
+                        <img class="image keypad" src="images/keypad-r.png" alt="Right Keypad" />
+                    </div>
+                </div>
+
+                <!-- Voice Command Status Box -->
+                <div class="voice-command-status box">
+                    <p id="voiceCommandStatus">Voice Command Status: <span>---</span></p>
+                    
+                    <!-- New Text Input and Submit Button -->
+                    <div id="ttsInputContainer">
+                        <input type="text" id="ttsInput" placeholder="Type what you want Pasqually to say..." />
+                        <button id="submitTTSButton" type="button">Speak</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer id="footer">
+            <div class="inner">
+                <p>
+                    <form id="showForm" action="javascript:void(0);">
+                        <select id="showListDropdown" name="Show List">
+                            <!-- Options will be dynamically inserted here -->
+                        </select>
+                        <button id="playButton" type="button">Play</button>
+                        <button id="pauseButton" type="button">Pause</button>
+                        <button id="stopButton" type="button">Stop</button>
+                    </form>
+                </p>
+            </div>
+        </footer>
+
+        <!-- WiFi Selection Popup -->
+        <div id="wifiPopup" class="popup-overlay" style="display: none;">
+            <div class="popup-content">
+                <button id="closeWifiPopup" class="close-button">&times;</button>
+                <h2>Select a WiFi Network</h2>
+                <div id="wifiList" class="wifi-list">
+                    <!-- Available WiFi networks will be populated here -->
+                </div>
+                <div class="wifi-connect">
+                    <label for="wifiPassword">Password:</label>
+                    <input type="password" id="wifiPassword" placeholder="Enter WiFi password" />
+                    <button id="connectWifiButton">Connect</button>
+                    <!-- New Hyperlink Added Below -->
+                    <div class="hotspot-link-container">
+                        <a href="#" id="hotspotLink">Set Hotspot</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scripts -->
+        <script src="assets/js/jquery.min.js"></script>
+        <script src="assets/js/jquery.scrolly.min.js"></script>
+        <script src="assets/js/jquery.poptrox.min.js"></script>
+        <script src="assets/js/skel.min.js"></script>
+        <script src="assets/js/util.js"></script>
+        <script src="assets/js/socket.io.min.js"></script>
+        <script src="assets/js/pasqually.js"></script>
+        <script src="assets/js/main.js"></script>
+    </body>
+</html>

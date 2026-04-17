@@ -10,7 +10,7 @@ class Setup:
         packages: List[str] = [
             "git", "build-essential", "python3-dev", "flex", "bison", "mpv", "hostapd", "dnsmasq",
             "python3-smbus", "python3-evdev", "python3-setuptools", "python3-mido",
-            "python3-flask", "python3-flask-socketio", "python3-pip",
+            "python3-flask", "python3-pip",
             "python3-psutil", "python3-pydispatch", "python3-pygame", "iw",
             "iproute2",
             # ALSA audio
@@ -19,6 +19,15 @@ class Setup:
         self._run_command("sudo apt update")
         self.install_packages(packages)
         self.install_python_packages([
+            # Flask-SocketIO and its dependencies — pinned for compatibility.
+            # Do NOT install python3-flask-socketio via apt; the system version
+            # is too old and causes AttributeError on _request_ctx_stack.
+            "werkzeug==2.3.7",
+            "flask==2.3.3",
+            "flask-socketio==5.3.6",
+            "python-socketio==5.10.0",
+            "python-engineio==4.8.0",
+            # Other pip-only packages
             "pvporcupine", "pvrhino", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
             "pywifi", "flask-talisman", "requests",
             # whisper/STT
