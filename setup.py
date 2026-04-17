@@ -27,14 +27,17 @@ class Setup:
             "flask-socketio==5.3.6",
             "python-socketio==5.10.0",
             "python-engineio==4.8.0",
+            # numpy pinned to <2.0 for openwakeword compatibility
+            "numpy<2.0",
             # Other pip-only packages
             "pvporcupine", "pvrhino", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
-            "pywifi", "flask-talisman", "requests",
+            "pywifi", "flask-talisman", "requests", "openwakeword",
             # whisper/STT
-            "pyaudio", "numpy",
+            "pyaudio",
         ])
         self.setup_piper_models()
         self.setup_whisper_models()
+        self.setup_openwakeword_models()
         self.setup_bashrc()
 
     def install_packages(self, packages: List[str]) -> None:
@@ -96,6 +99,24 @@ class Setup:
             except subprocess.CalledProcessError as e:
                 print(f"Failed to download whisper model {model}: {e}")
                 sys.exit(1)
+
+    def setup_openwakeword_models(self) -> None:
+        """Download openWakeWord base models and check for custom hey_kermit model."""
+        try:
+            import openwakeword
+            openwakeword.utils.download_models()
+            print("openWakeWord base models downloaded.")
+        except Exception as e:
+            print(f"Failed to download openWakeWord models: {e}")
+            sys.exit(1)
+
+        # Check for custom hey_kermit model
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        src = os.path.join(script_dir, "models", "hey_ker_mit.onnx")
+        if os.path.exists(src):
+            print("hey_ker_mit.onnx found in models/.")
+        else:
+            print("WARNING: hey_ker_mit.onnx not found in models/ — copy it there manually.")
 
     def setup_bashrc(self) -> None:
         """Add required environment variables to ~/.bashrc if not already present."""
