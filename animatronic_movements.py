@@ -60,7 +60,7 @@ class Movement:
 
 		self.head_tilt_up = MovementStruct()
 		self.head_tilt_up.description = "Head Tilt Up"
-		self.head_tilt_up.key = 'w'
+		self.head_tilt_up.key = 's'
 		self.head_tilt_up.output_pin1 = [0x20, 3]  # Head tilt down
 		self.head_tilt_up.output_pin2 = [0x21, 6]  # Head tilt up
 		self.head_tilt_up.midi_note = 63
@@ -86,7 +86,7 @@ class Movement:
 
 		self.body_lean_up = MovementStruct()
 		self.body_lean_up.description = "Body Lean Up"
-		self.body_lean_up.key = 's'
+		self.body_lean_up.key = 'w'
 		self.body_lean_up.output_pin1 = [0x23, 4]  # Lean up
 		self.body_lean_up.output_pin2 = [0x21, 1]  # Lean down
 		self.body_lean_up.midi_note = 64

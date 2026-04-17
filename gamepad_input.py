@@ -7,38 +7,38 @@ from typing import Optional, Dict, Any, List
 
 class Button(Enum):
 	# Bumpers
-	LEFT_BUMPER = 'q'               # eyes left
-	RIGHT_BUMPER = 'e'              # eyes right
+	LEFT_BUMPER = 'q'               # head tilt left
+	RIGHT_BUMPER = 'e'              # head tilt right
 
 	# Left Stick
-	LEFT_STICK_LEFT = 'a'           # neck left
-	LEFT_STICK_RIGHT = 'd'          # neck right
-	LEFT_STICK_UP = 's'             # neck up
+	LEFT_STICK_LEFT = 'a'           # head turn left
+	LEFT_STICK_RIGHT = 'd'          # head turn right
+	LEFT_STICK_UP = 'w'             # head tilt up
 
 	# Right Stick
-	RIGHT_STICK_LEFT = 'i'          # both shoulders move out
-	RIGHT_STICK_RIGHT = 'i'         # both shoulders move out (duplicate)
-	RIGHT_STICK_DOWN = 'k'          # both arms down
+	RIGHT_STICK_LEFT = 'z'          # body turn left
+	RIGHT_STICK_RIGHT = 'c'         # body turn right
+	RIGHT_STICK_DOWN = 's'          # both lean up
 
 	# Triggers
-	LEFT_TRIGGER = 'z'              # mustache
+	LEFT_TRIGGER = 'x'              # mouth
 	RIGHT_TRIGGER = 'x'             # mouth
 
 	# Face Buttons
-	BTN_A = 'j'                   # left arm down
-	BTN_B = 'l'                   # right arm down
-	BTN_NORTH = 'u'               # left shoulder out
-	BTN_WEST = 'o'                # right shoulder out
+	BTN_A = 'z'
+	BTN_B = 'c'
+	BTN_NORTH = 's'
+	BTN_WEST = 'x'
 
 	# Hat (analog stick button)
-	BTN_THUMBL = 'w'              # blink
-	BTN_THUMBR = 'w'              # blink
+	BTN_THUMBL = 'x'
+	BTN_THUMBR = 'x'
 
 	# D-pad
-	DPAD_LEFT = 'a'               # neck left
-	DPAD_RIGHT = 'd'              # neck right
-	DPAD_DOWN = 'w'               # head up
-	DPAD_UP = 's'                # blink
+	DPAD_LEFT = 'a'
+	DPAD_RIGHT = 'd'
+	DPAD_DOWN = 'w'
+	DPAD_UP = 'x'
 
 	# Start and Select Buttons. Holding down both toggles mirrored mode
 	START = 'start'
