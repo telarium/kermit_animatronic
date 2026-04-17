@@ -1,41 +1,57 @@
 #!/usr/bin/env python3
-
 import os
+import sys
+import warnings
 
-# Supress annoying Pygame messages
+# Suppress noise — must be before any imports that touch audio
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
+os.environ['SDL_VIDEODRIVER'] = 'dummy'
+os.environ['SDL_AUDIODRIVER'] = 'dummy'  # No audio output device yet
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["ORT_LOGGING_LEVEL"] = "3"
 if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
-
-import sys
+warnings.filterwarnings("ignore")
+ 
+# Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
+_devnull = open(os.devnull, 'w')
+_old_stderr = os.dup(2)
+os.dup2(_devnull.fileno(), 2)
+ 
+# Init pygame mixer FIRST before anything else touches ALSA
+import pygame
+pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
+pygame.mixer.init()
+ 
+# Now safe to import everything else
 import signal
 import time
 import threading
-import pygame
 import ctypes
 from pydispatch import dispatcher
 from web_io import WebServer
 from gpio import GPIO
+from wakeword_detection import WakeWord
 from animatronic_movements import Movement
 from gamepad_input import USBGamepadReader
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
-
-
-class Pasqually:
+ 
+# Restore stderr now that all noisy imports are done
+os.dup2(_old_stderr, 2)
+os.close(_old_stderr)
+_devnull.close()
+ 
+print("Startup complete.")
+ 
+class Kermit:
 	def __init__(self) -> None:
 		self.is_running: bool = True
-
-		# Initialize pygame for managing audio playback
-		os.environ['SDL_VIDEODRIVER'] = 'dummy'
-		pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
-		pygame.display.init()
-		pygame.display.set_mode((1, 1))
-
 		self.wifi_access_points = None
 
 		# Initialize components
 		self.gpio = GPIO()
+		self.wakeword = WakeWord()
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
@@ -48,12 +64,14 @@ class Pasqually:
 		signal.signal(signal.SIGINT, self.shutdown)
 		signal.signal(signal.SIGTERM, self.shutdown)
 
+		self.wakeword.set_enabled(True)
 		self.movements.set_default_animation(True)
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_mirrored_mode_toggle, signal='mirrorModeToggle', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wakeword_event, signal='wakewordDetected', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
@@ -142,6 +160,10 @@ class Pasqually:
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		#self.wifi_management.scan_wifi_access_points()
 
+	def on_wakeword_event(self) -> None:
+		# TODO... later, disable wakeword detection until done with STT and response.
+		print("HI!")
+
 	def on_key_event(self, key: any, val: any) -> None:
 		# Receive key events from the HTML front end and execute any specified movement
 		try:
@@ -166,5 +188,5 @@ class Pasqually:
 
 
 if __name__ == "__main__":
-	animatronic = Pasqually()
+	animatronic = Kermit()
 	animatronic.run()
