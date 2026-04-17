@@ -14,7 +14,7 @@ class MIDI:
 		# Callback function that is called when a MIDI message is received.
 		# (Note: fixed the variable name 'velocity' to 'value')
 		# print("Received MIDI message:", message)
-		print("TODO")
+		print("TODO MIDI RECEIVE")
 
 	def send_message(self, note: int, value: int) -> None:
 		#if value == 1:
@@ -25,7 +25,7 @@ class MIDI:
 			# msg = mido.Message('note_off', note=note, velocity=0)
 		# self.outport.send(msg)
 		#print(f"Sent MIDI message: {msg}")
-		print("TODO")
+		print("TODO MIDI SEND")
 
 # Example usage:
 if __name__ == "__main__":
