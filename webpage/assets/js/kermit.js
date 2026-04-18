@@ -1,4 +1,4 @@
-// pasqually.js
+// kermit.js
 
 const protocol = 'ws://';
 const socketUrl = `${protocol}${document.domain}:${location.port}`;
@@ -38,8 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	setupModeCheckboxes();
 	setupSubmitTTS();
 	setupShowControlButtons();
-	setupHotspotLink(); // Initialize hotspot link functionality
-	setupPasswordEnterKey(); // Initialize Enter key functionality for password input
+	setupPasswordEnterKey();
 });
 
 // Handle visibility of keypad images on mobile devices
@@ -56,45 +55,6 @@ function handleMobileKeypadVisibility() {
 	});
 }
 
-let bHotspotActive = false;
-
-// Update system information displayed on the page
-socket.on('systemInfo', (msg) => {
-	bHotspotActive = msg.hotspot_status;
-	if (bHotspotActive === true) {
-		setHotspotLinkText("Deactivate Hotspot");
-	} else {
-		setHotspotLinkText("Activate Hotspot");
-	}
-	msg.wifi_ssid = truncateString(msg.wifi_ssid, 20);
-
-	const newMsg = `
-		<p>
-			Wifi: <a href="#" id="wifiSSIDLink">${msg.wifi_ssid}</a><i>(${msg.wifi_signal}%)</i><br>
-			Pressure: ${msg.psi} PSI<br>
-			CPU: ${msg.cpu}%<br>
-			RAM: ${msg.ram}%<br>
-			Disk Usage: ${msg.disk}%<br>
-			Temp: ${msg.temperature}°C<br>
-		</p>
-	`;
-	const sysInfoElement = document.getElementById("sysInfo");
-	if (sysInfoElement) {
-		sysInfoElement.innerHTML = newMsg;
-
-		// Add event listener to the WiFi SSID link
-		const wifiLink = document.getElementById('wifiSSIDLink');
-		if (wifiLink) {
-			wifiLink.addEventListener('click', (e) => {
-				e.preventDefault();
-				openWifiPopup();
-			});
-		}
-	} else {
-		console.warn('System Info element not found!');
-	}
-});
-
 /**
  * Update the voice command status displayed on the page.
  * @param {string} id - The status identifier.
@@ -105,7 +65,7 @@ function updateVoiceCommandStatus(id, value) {
 
 	switch (id) {
 		case "idle":
-			statusText = "Waiting for 'Hey chef'...";
+			statusText = "Waiting for 'Hey Kermit'...";
 			break;
 		case "wakeWord":
 			statusText = "Listening...";
@@ -164,7 +124,7 @@ socket.on('showListLoaded', (data) => {
 
 	const dropdown = document.querySelector('select[name="Show List"]');
 	if (dropdown) {
-		dropdown.innerHTML = ''; // Clear existing options
+		dropdown.innerHTML = '';
 
 		showList.forEach(item => {
 			const option = document.createElement('option');
@@ -222,7 +182,7 @@ function setupShowControlButtons() {
 	}
 }
 
-// Simplified key press handling (MIDI and gamepad code removed)
+// Simplified key press handling
 function sendKey(key, value) {
 	if (bInvertHeadNod && key.toLowerCase() === 's') {
 		value = 1 - value;
@@ -234,46 +194,42 @@ function sendKey(key, value) {
 const down = new Set();
 
 function doKeyDown(event) {
-	// Prevent handling if focus is on the TTS input or WiFi password input
 	if (event.target.id === 'ttsInput' || event.target.id === 'wifiPassword') {
 		return;
 	}
 
 	const charCode = event.which || event.keyCode;
-	if (!down.has(charCode)) { // first press
+	if (!down.has(charCode)) {
 		sendKey(String.fromCharCode(charCode), 1);
-		down.add(charCode); // Add key to the Set
+		down.add(charCode);
 	}
 }
 
 function doKeyUp(event) {
-	// Prevent handling if focus is on the TTS input or WiFi password input
 	if (event.target.id === 'ttsInput' || event.target.id === 'wifiPassword') {
 		return;
 	}
 
 	const charCode = event.which || event.keyCode;
-	if (down.has(charCode)) { // only send if key was previously pressed
+	if (down.has(charCode)) {
 		sendKey(String.fromCharCode(charCode), 0);
-		down.delete(charCode); // Remove key from the Set
+		down.delete(charCode);
 	}
 }
 
 document.addEventListener('keydown', doKeyDown);
 document.addEventListener('keyup', doKeyUp);
 
-// Mode Handling (Mirrored & Retro)
+// Mode Handling
 function setupModeCheckboxes() {
 	const mirroredModeCheckbox = document.getElementById('mirroredModeCheckbox');
 	const retroModeCheckbox = document.getElementById('retroModeCheckbox');
 	headNodInvertedCheckbox = document.getElementById('headNodInvertedCheckbox');
 
 	if (mirroredModeCheckbox) {
-		// Initialize Mirrored Mode based on saved preference
 		const mirroredModeEnabled = localStorage.getItem('mirroredModeEnabled') === 'true';
 		mirroredModeCheckbox.checked = mirroredModeEnabled;
 
-		// Add event listener for Mirrored Mode checkbox
 		mirroredModeCheckbox.addEventListener('change', function () {
 			bMirroredModeEnabled = this.checked;
 			localStorage.setItem('mirroredModeEnabled', this.checked);
@@ -336,9 +292,6 @@ function setupModeCheckboxes() {
 	}
 }
 
-/**
- * Perform flip animation on the main content.
- */
 function performFlipAnimation() {
 	const mainContent = document.getElementById('main');
 	if (!mainContent) {
@@ -356,9 +309,6 @@ function performFlipAnimation() {
 	mainContent.addEventListener('animationend', removeAnimation);
 }
 
-/**
- * Reverse the flip animation on the main content.
- */
 function reverseFlipAnimation() {
 	const mainContent = document.getElementById('main');
 	if (mainContent) {
@@ -391,9 +341,6 @@ function setupSubmitTTS() {
 	}
 }
 
-/**
- * Submit the TTS input to the backend.
- */
 function submitTTS() {
 	const inputField = document.getElementById('ttsInput');
 	const submitButton = document.getElementById('submitTTSButton');
@@ -416,10 +363,6 @@ function submitTTS() {
 	}
 }
 
-/**
- * Populate the TTS input box with a given string.
- * @param {string} text - The text to populate in the TTS input.
- */
 function populateTTSInput(text) {
 	const inputField = document.getElementById('ttsInput');
 	if (inputField) {
@@ -430,7 +373,45 @@ function populateTTSInput(text) {
 	}
 }
 
-// WiFi Popup Handling
+// -------------------------------------------------------------------------
+// WiFi
+// -------------------------------------------------------------------------
+
+let wifiSSIDs = [];
+let selectedSSID = null;
+
+function updateWifiStatusLink(ssid, signal) {
+	const link = document.getElementById('wifiStatusLink');
+	if (!link) return;
+	if (ssid) {
+		link.textContent = `${truncateString(ssid, 20)} (${signal}%)`;
+	} else {
+		link.textContent = 'Not connected';
+	}
+}
+
+socket.on('wifiScan', function(data) {
+	wifiSSIDs = data;
+});
+
+socket.on('wifiConnected', function(data) {
+	updateWifiStatusLink(data.ssid, data.signal);
+});
+
+socket.on('wifiDisconnected', function() {
+	updateWifiStatusLink(null, 0);
+});
+
+socket.on('wifiPasswordRequired', function(data) {
+	alert(`Password required to connect to '${data.ssid}'. Please enter it in the WiFi popup.`);
+	openWifiPopup();
+});
+
+socket.on('wifiWrongPassword', function(data) {
+	alert(`Wrong password for '${data.ssid}'. Please try again.`);
+	openWifiPopup();
+});
+
 function setupWifiPopupEvents() {
 	const closePopupButton = document.getElementById('closeWifiPopup');
 	const connectButton = document.getElementById('connectWifiButton');
@@ -447,11 +428,11 @@ function setupWifiPopupEvents() {
 			const passwordInput = document.getElementById('wifiPassword');
 			const password = passwordInput ? passwordInput.value.trim() : '';
 
-			if (selectedSSID && password) {
+			if (selectedSSID) {
 				connectToWifi(selectedSSID, password);
 				closeWifiPopup();
 			} else {
-				alert('Please select a WiFi network and enter the password.');
+				alert('Please select a WiFi network first.');
 			}
 		});
 	} else {
@@ -469,9 +450,6 @@ function setupWifiPopupEvents() {
 	}
 }
 
-/**
- * Open the WiFi selection popup.
- */
 function openWifiPopup() {
 	populateWifiList();
 	const popup = document.getElementById('wifiPopup');
@@ -482,9 +460,6 @@ function openWifiPopup() {
 	}
 }
 
-/**
- * Close the WiFi selection popup.
- */
 function closeWifiPopup() {
 	const popup = document.getElementById('wifiPopup');
 	if (popup) {
@@ -494,9 +469,6 @@ function closeWifiPopup() {
 	}
 }
 
-/**
- * Populate the WiFi networks list in the popup.
- */
 function populateWifiList() {
 	const wifiListDiv = document.getElementById('wifiList');
 	if (!wifiListDiv) {
@@ -524,18 +496,6 @@ function populateWifiList() {
 	});
 }
 
-let wifiSSIDs = [];
-let selectedSSID = null;
-
-
-socket.on('wifiScan', function(data){
-    wifiSSIDs = data
-});
-
-/**
- * Handle WiFi network selection.
- * @param {string} ssid - The SSID of the selected WiFi network.
- */
 function selectWifi(ssid) {
 	selectedSSID = ssid;
 	const wifiItems = document.querySelectorAll('.wifi-item');
@@ -544,71 +504,11 @@ function selectWifi(ssid) {
 	});
 }
 
-/**
- * Connect to the selected WiFi network with the provided password.
- * @param {string} ssid - The SSID of the WiFi network.
- * @param {string} password - The password for the WiFi network.
- */
 function connectToWifi(ssid, password) {
 	socket.emit('onConnectToWifi', { ssid, password });
 	console.log(`Connecting to WiFi SSID: ${ssid}`);
-	alert('Attempting to connect to WiFi network. Please wait...');
 }
 
-/**
- * Sets the text of the hotspot hyperlink.
- * @param {string} text - The text to display for the hotspot link.
- */
-function setHotspotLinkText(text) {
-	const hotspotLink = document.getElementById('hotspotLink');
-	if (hotspotLink) {
-		hotspotLink.textContent = text;
-	} else {
-		console.warn('Hotspot Link element not found!');
-	}
-}
-
-/**
- * Handles the hotspot setup when the hyperlink is clicked.
- */
-function setHotspot() {
-	bHotspotActive = !bHotspotActive;
-
-	socket.emit('onSetHotspot', bHotspotActive);
-
-	if (bHotspotActive === true) {
-		alert("Hotspot activating...");
-	} else {
-		alert("Hotspot deactivating. Attempting to reconnect to WiFi...");
-	}
-
-	if (bHotspotActive) {
-		setHotspotLinkText("Deactivate Hotspot");
-	} else {
-		setHotspotLinkText("Activate Hotspot");
-	}
-}
-
-/**
- * Initializes the event listener for the hotspot hyperlink.
- */
-function setupHotspotLink() {
-	const hotspotLink = document.getElementById('hotspotLink');
-	if (hotspotLink) {
-		hotspotLink.addEventListener('click', (e) => {
-			e.preventDefault();
-			setHotspot();
-			closeWifiPopup();
-		});
-	} else {
-		console.warn('Hotspot Link element not found!');
-	}
-}
-
-/**
- * Initializes the Enter key functionality for the WiFi password input.
- * When Enter is pressed, it triggers the Connect button if conditions are met.
- */
 function setupPasswordEnterKey() {
 	const wifiPasswordInput = document.getElementById('wifiPassword');
 	const connectButton = document.getElementById('connectWifiButton');
@@ -617,10 +517,10 @@ function setupPasswordEnterKey() {
 		wifiPasswordInput.addEventListener('keydown', function (event) {
 			if (event.key === 'Enter') {
 				event.preventDefault();
-				if (selectedSSID && wifiPasswordInput.value.trim() !== '') {
+				if (selectedSSID) {
 					connectButton.click();
 				} else {
-					alert('Please select a WiFi network and enter the password.');
+					alert('Please select a WiFi network first.');
 				}
 			}
 		});

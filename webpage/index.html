@@ -20,47 +20,16 @@
         <!-- Main -->
         <div id="main">
             <div class="inner">
-
-                <!-- Boxes -->
-                <div class="thumbnails">
-
-                    <div class="box">
-                        <img class="image keypad" src="images/keypad-l.png" alt="Left Keypad" />
-                    </div>
-
-                    <div class="box">
-                        <div class="inner">
-                            <div class="mode-toggle">
-                                <label for="mirroredModeCheckbox">
-                                    <input type="checkbox" id="mirroredModeCheckbox" title="Swap animations on the right and left sides of the animatronic" />
-                                    Enable Mirrored Mode
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="box">
-                        <img class="image keypad" src="images/keypad-r.png" alt="Right Keypad" />
-                    </div>
-                </div>
-
                 <!-- Voice Command Status Box -->
                 <div class="voice-command-status box">
                     <p id="voiceCommandStatus">Voice Command Status: <span>---</span></p>
                     
                     <!-- New Text Input and Submit Button -->
                     <div id="ttsInputContainer">
-                        <input type="text" id="ttsInput" placeholder="Type what you want Pasqually to say..." />
+                        <input type="text" id="ttsInput" placeholder="Type what you want Kermit to say..." />
                         <button id="submitTTSButton" type="button">Speak</button>
                     </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Footer -->
-        <footer id="footer">
-            <div class="inner">
-                <p>
+                    <p>
                     <form id="showForm" action="javascript:void(0);">
                         <select id="showListDropdown" name="Show List">
                             <!-- Options will be dynamically inserted here -->
@@ -69,9 +38,21 @@
                         <button id="pauseButton" type="button">Pause</button>
                         <button id="stopButton" type="button">Stop</button>
                     </form>
+
+                 <p id="wifiStatus">WiFi: <a href="#" id="wifiStatusLink" onclick="openWifiPopup(); return false;">---</a></p>
                 </p>
+                    <div class="box">
+                        <img class="image keypad" src="images/keypad-l.png" alt="Left Keypad" />
+                    </div>
+                    <div class="mode-toggle">
+                                <label for="mirroredModeCheckbox">
+                                    <input type="checkbox" id="mirroredModeCheckbox" title="Swap animations on the right and left sides of the animatronic" />
+                                    Enable Mirrored Mode
+                                </label>
+                            </div>
+                </div>
             </div>
-        </footer>
+        </div>
 
         <!-- WiFi Selection Popup -->
         <div id="wifiPopup" class="popup-overlay" style="display: none;">
@@ -85,10 +66,6 @@
                     <label for="wifiPassword">Password:</label>
                     <input type="password" id="wifiPassword" placeholder="Enter WiFi password" />
                     <button id="connectWifiButton">Connect</button>
-                    <!-- New Hyperlink Added Below -->
-                    <div class="hotspot-link-container">
-                        <a href="#" id="hotspotLink">Set Hotspot</a>
-                    </div>
                 </div>
             </div>
         </div>
@@ -100,7 +77,7 @@
         <script src="assets/js/skel.min.js"></script>
         <script src="assets/js/util.js"></script>
         <script src="assets/js/socket.io.min.js"></script>
-        <script src="assets/js/pasqually.js"></script>
+        <script src="assets/js/kermit.js"></script>
         <script src="assets/js/main.js"></script>
     </body>
 </html>

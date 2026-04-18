@@ -70,6 +70,7 @@ class Kermit:
 
 		self.wakeword.set_enabled(True)
 		self.movements.set_default_animation(True)
+		self.wifi_management.scan()
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
@@ -86,16 +87,16 @@ class Kermit:
 		dispatcher.connect(self.on_show_playback_midi_event, signal='showPlaybackMidiEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_web_tts_event, signal='webTTSEvent', sender=dispatcher.Any)
+		# WiFi signals from WifiManagement
+		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_password_required, signal='wifiPasswordRequired', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_wrong_password, signal='wifiWrongPassword', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_disconnected, signal='wifiDisconnected', sender=dispatcher.Any)
 
 	def run(self) -> None:
 		try:
 			while self.is_running:
-				# Broadcast a new wifi scan result if it has changed.
-				#current_wifi = self.wifi_management.get_wifi_access_points()
-				#if current_wifi != self.wifi_access_points:
-				#	self.wifi_access_points = current_wifi
-				#	self.web_server.broadcast('wifiScan', self.wifi_access_points)
-
 				time.sleep(0.005)
 
 		except Exception as e:
@@ -168,8 +169,13 @@ class Kermit:
 		print(f"Web client connected from IP: {client_ip}")
 		self.show_player.get_show_list()
 		self.web_server.broadcast('movementInfo', self.movements.get_all_movement_info())
+		# Send the cached scan results and current wifi status to the newly connected client, then kick off a fresh scan
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
-		#self.wifi_management.scan_wifi_access_points()
+		current_ssid = self.wifi_management.get_current_ssid()
+		if current_ssid:
+			match = next((n for n in (self.wifi_access_points or []) if n['ssid'] == current_ssid), None)
+			self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength'] if match else 0})
+		self.wifi_management.scan()
 
 	def on_wakeword_event(self) -> None:
 		def handle():
@@ -199,11 +205,48 @@ class Kermit:
 		self.movements.set_mirrored(new_mirror_mode)
 
 	def on_connect_to_wifi_network(self, ssid: str, password: any = None) -> None:
-		print("TODO CONNECT TO WIFI")
+		self.wifi_management.connect(ssid, password if password else None)
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
 		print("TODO TTS EVENT")
+
+	# -------------------------------------------------------------------------
+	# WiFi signal handlers
+	# -------------------------------------------------------------------------
+
+	def on_wifi_scan_complete(self, networks: list) -> None:
+		self.wifi_access_points = networks
+		self.web_server.broadcast('wifiScan', networks)
+		# Update the wifi status link with fresh signal strength now that we have scan data
+		current_ssid = self.wifi_management.get_current_ssid()
+		if current_ssid:
+			match = next((n for n in networks if n['ssid'] == current_ssid), None)
+			if match:
+				self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength']})
+
+	def on_wifi_connected(self, ssid: str) -> None:
+		print(f"WiFi connected: {ssid}")
+		# Pull signal from the cached scan rather than querying the radio,
+		# which may not have settled yet right after connecting.
+		signal_strength = 0
+		if self.wifi_access_points:
+			match = next((n for n in self.wifi_access_points if n['ssid'] == ssid), None)
+			if match:
+				signal_strength = match['signal_strength']
+		self.web_server.broadcast('wifiConnected', {'ssid': ssid, 'signal': signal_strength})
+
+	def on_wifi_password_required(self, ssid: str) -> None:
+		print(f"WiFi password required for: {ssid}")
+		self.web_server.broadcast('wifiPasswordRequired', {'ssid': ssid})
+
+	def on_wifi_wrong_password(self, ssid: str) -> None:
+		print(f"WiFi wrong password for: {ssid}")
+		self.web_server.broadcast('wifiWrongPassword', {'ssid': ssid})
+
+	def on_wifi_disconnected(self) -> None:
+		print("WiFi disconnected.")
+		self.web_server.broadcast('wifiDisconnected', {})
 
 
 if __name__ == "__main__":
