@@ -12,17 +12,17 @@ os.environ["ORT_LOGGING_LEVEL"] = "3"
 if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
 warnings.filterwarnings("ignore")
- 
+
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
 _devnull = open(os.devnull, 'w')
 _old_stderr = os.dup(2)
 os.dup2(_devnull.fileno(), 2)
- 
+
 # Init pygame mixer FIRST before anything else touches ALSA
 import pygame
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
 pygame.mixer.init()
- 
+
 # Now safe to import everything else
 import signal
 import time
@@ -32,18 +32,19 @@ from pydispatch import dispatcher
 from web_io import WebServer
 from gpio import GPIO
 from wakeword_detection import WakeWord
+from speech_to_text import SpeechToText
 from animatronic_movements import Movement
 from gamepad_input import USBGamepadReader
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
- 
+
 # Restore stderr now that all noisy imports are done
 os.dup2(_old_stderr, 2)
 os.close(_old_stderr)
 _devnull.close()
- 
+
 print("Startup complete.")
- 
+
 class Kermit:
 	def __init__(self) -> None:
 		self.is_running: bool = True
@@ -52,6 +53,7 @@ class Kermit:
 		# Initialize components
 		self.gpio = GPIO()
 		self.wakeword = WakeWord()
+		self.stt = SpeechToText()
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
@@ -71,7 +73,8 @@ class Kermit:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_mirrored_mode_toggle, signal='mirrorModeToggle', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
-		dispatcher.connect(self.on_wakeword_event, signal='wakewordDetected', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_transcription_result, signal='transcriptionResult', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
@@ -110,10 +113,12 @@ class Kermit:
 			if self.show_player:
 				self.show_player.stop_show()
 
+			if self.stt:
+				self.stt.shutdown()
+
 			# Ensure all non-main threads exit before quitting pygame
 			for thread in threading.enumerate():
 				if thread is not threading.main_thread():
-					# If thread is still alive, force kill it
 					if thread.is_alive():
 						try:
 							ctypes.pythonapi.PyThreadState_SetAsyncExc(
@@ -137,17 +142,21 @@ class Kermit:
 		self.web_server.broadcast('showListLoaded', show_list)
 
 	def on_show_play(self, show_name: str) -> None:
+		self.wakeword.set_enabled(False)
 		self.show_player.load_show(show_name)
 		self.movements.set_default_animation(False)
 
 	def on_show_stop(self) -> None:
+		self.wakeword.set_enabled(True)
 		self.show_player.stop_show()
 		self.movements.set_default_animation(True)
 
 	def on_show_end(self) -> None:
+		self.wakeword.set_enabled(True)
 		self.movements.set_default_animation(True)
 
 	def on_show_pause(self) -> None:
+		self.wakeword.set_enabled(True)
 		self.show_player.toggle_pause()
 
 	def on_show_playback_midi_event(self, midi_note: any, val: any) -> None:
@@ -161,11 +170,17 @@ class Kermit:
 		#self.wifi_management.scan_wifi_access_points()
 
 	def on_wakeword_event(self) -> None:
-		# TODO... later, disable wakeword detection until done with STT and response.
-		print("HI!")
+		def handle():
+			self.wakeword.set_enabled(False)
+			self.stt.listen_once()
+		threading.Thread(target=handle, daemon=True).start()
+
+	def on_transcription_result(self, text: str) -> None:
+		print(f"Heard: {text}")
+		# TODO: send to LLM
+		self.wakeword.set_enabled(True)
 
 	def on_key_event(self, key: any, val: any) -> None:
-		# Receive key events from the HTML front end and execute any specified movement
 		try:
 			self.movements.execute_movement(str(key).lower(), val)
 		except Exception as e:
@@ -175,7 +190,6 @@ class Kermit:
 		self.movements.set_mirrored(val)
 
 	def on_mirrored_mode_toggle(self) -> None:
-		# Toggle animation mirrored mode (swapping left and right movements)
 		new_mirror_mode = not self.movements.b_mirrored
 		self.movements.set_mirrored(new_mirror_mode)
 
