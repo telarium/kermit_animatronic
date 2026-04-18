@@ -33,6 +33,7 @@ from web_io import WebServer
 from gpio import GPIO
 from wakeword_detection import WakeWord
 from speech_to_text import SpeechToText
+from voice_commands import VoiceCommandHandler
 from animatronic_movements import Movement
 from gamepad_input import USBGamepadReader
 from show_player import ShowPlayer
@@ -54,6 +55,7 @@ class Kermit:
 		self.gpio = GPIO()
 		self.wakeword = WakeWord()
 		self.stt = SpeechToText()
+		self.voiceCommandHandler = VoiceCommandHandler()
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
@@ -178,6 +180,9 @@ class Kermit:
 	def on_transcription_result(self, text: str) -> None:
 		print(f"Heard: {text}")
 		# TODO: send to LLM
+		if( not self.voiceCommandHandler.parse(text)):
+			pring("TODO: LLM MAGIC!")
+
 		self.wakeword.set_enabled(True)
 
 	def on_key_event(self, key: any, val: any) -> None:
