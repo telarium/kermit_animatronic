@@ -384,7 +384,7 @@ function updateWifiStatusLink(ssid, signal) {
 	const link = document.getElementById('wifiStatusLink');
 	if (!link) return;
 	if (ssid) {
-		link.textContent = `${truncateString(ssid, 20)} (${signal}%)`;
+		link.textContent = `${truncateString(ssid, 40)} (${signal}%)`;
 	} else {
 		link.textContent = 'Not connected';
 	}

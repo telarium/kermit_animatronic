@@ -4,11 +4,11 @@
     HTML design based on "Full Motion" by TEMPLATED
     Released for free under the Creative Commons Attribution 3.0 license (templated.co/license)
 -->
-<html>
+<html lang="en">
     <head>
         <title>Hi Ho! Kermit the Frog, here!</title>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <link rel="stylesheet" href="assets/css/main.css" />
     </head>
     <body id="top">
@@ -20,37 +20,53 @@
         <!-- Main -->
         <div id="main">
             <div class="inner">
-                <!-- Voice Command Status Box -->
-                <div class="voice-command-status box">
+
+                <!-- Voice Command Status + TTS Input -->
+                <div class="card" id="status-card">
                     <p id="voiceCommandStatus">Voice Command Status: <span>---</span></p>
-                    
-                    <!-- New Text Input and Submit Button -->
                     <div id="ttsInputContainer">
-                        <input type="text" id="ttsInput" placeholder="Type what you want Kermit to say..." />
+                        <input type="text" id="ttsInput" placeholder="Type what you want Kermit to say…" />
                         <button id="submitTTSButton" type="button">Speak</button>
                     </div>
-                    <p>
-                    <form id="showForm" action="javascript:void(0);">
-                        <select id="showListDropdown" name="Show List">
+                </div>
+
+                <!-- Show Controls -->
+                <div class="card" id="show-card">
+                    <div id="showControls">
+                        <select id="showListDropdown" name="Show List" aria-label="Show list">
                             <!-- Options will be dynamically inserted here -->
                         </select>
-                        <button id="playButton" type="button">Play</button>
-                        <button id="pauseButton" type="button">Pause</button>
-                        <button id="stopButton" type="button">Stop</button>
-                    </form>
-
-                 <p id="wifiStatus">WiFi: <a href="#" id="wifiStatusLink" onclick="openWifiPopup(); return false;">---</a></p>
-                </p>
-                    <div class="box">
-                        <img class="image keypad" src="images/keypad-l.png" alt="Left Keypad" />
+                        <div class="button-row">
+                            <button id="playButton" type="button" title="Play">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                            </button>
+                            <button id="pauseButton" type="button" title="Pause">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="4" y="3" width="5" height="18" rx="1"/><rect x="15" y="3" width="5" height="18" rx="1"/></svg>
+                            </button>
+                            <button id="stopButton" type="button" title="Stop">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                            </button>
+                        </div>
                     </div>
-                    <div class="mode-toggle">
-                                <label for="mirroredModeCheckbox">
-                                    <input type="checkbox" id="mirroredModeCheckbox" title="Swap animations on the right and left sides of the animatronic" />
-                                    Enable Mirrored Mode
-                                </label>
-                            </div>
                 </div>
+
+                <!-- WiFi Status -->
+                <div class="card" id="wifi-card">
+                    <p id="wifiStatus">WiFi: <a href="#" id="wifiStatusLink" onclick="openWifiPopup(); return false;">---</a></p>
+                </div>
+
+                <!-- Keypad + Mirrored Mode -->
+                <div class="card" id="keypad-card">
+                    <img class="keypad-img" src="images/keypad-l.png" alt="Left Keypad" />
+                    <div class="mode-toggle">
+                        <label for="mirroredModeCheckbox">
+                            <input type="checkbox" id="mirroredModeCheckbox"
+                                   title="Swap animations on the right and left sides of the animatronic" />
+                            Enable Mirrored Mode
+                        </label>
+                    </div>
+                </div>
+
             </div>
         </div>
 
