@@ -30,7 +30,7 @@ class Setup:
             # numpy pinned to <2.0 for openwakeword compatibility
             "numpy<2.0",
             # Other pip-only packages
-            "pvporcupine", "pvrhino", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
+            "pvporcupine", "rapidfuzz", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
             "pywifi", "flask-talisman", "requests", "openwakeword",
             # whisper/STT
             "pyaudio",
