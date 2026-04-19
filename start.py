@@ -222,6 +222,7 @@ class Kermit:
 		self.wakeword.set_enabled(True)
 
 	def on_llm_response(self, response: str) -> None:
+		print(f"Response: {response}")
 		self.tts.speak(response)
 
 	def on_key_event(self, key: any, val: any) -> None:
