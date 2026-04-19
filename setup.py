@@ -31,7 +31,7 @@ class Setup:
             "numpy<2.0",
             # Other pip-only packages
             "pvporcupine", "rapidfuzz", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
-            "pywifi", "flask-talisman", "requests", "openwakeword", "pyudev",
+            "pywifi", "flask-talisman", "requests", "openwakeword", "pyudev", "anthropic",
             # whisper/STT
             "pyaudio",
         ])

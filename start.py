@@ -33,6 +33,7 @@ from web_io import WebServer
 from gpio import GPIO
 from wakeword_detection import WakeWord
 from speech_to_text import SpeechToText
+from text_to_speech import TextToSpeech
 from voice_commands import VoiceCommandHandler
 from llm_service import LLM
 from animatronic_movements import Movement
@@ -57,6 +58,7 @@ class Kermit:
 		self.gpio = GPIO()
 		self.wakeword = WakeWord()
 		self.stt = SpeechToText()
+		self.tts = TextToSpeech()
 		self.voiceCommandHandler = VoiceCommandHandler()
 		self.llm = LLM();
 		self.movements = Movement(self.gpio)
@@ -115,6 +117,7 @@ class Kermit:
 			print(f"Config found at {path}")
 			self.wifi_management.apply_config(path)
 			self.llm.apply_config(path)
+			self.tts.apply_config(path)
 		else:
 			self.config_path = None
 			print(f"Warning: Config file not found at {path}. Continuing with no config.")
@@ -219,7 +222,7 @@ class Kermit:
 		self.wakeword.set_enabled(True)
 
 	def on_llm_response(self, response: str) -> None:
-		print(f"LLM Response: {response}")
+		self.tts.speak(response)
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
