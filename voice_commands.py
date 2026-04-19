@@ -61,7 +61,7 @@ class VoiceCommandHandler:
 		"something for me", "me a song", "us a song",
 	}
 
-	CONFIDENCE_THRESHOLD = 70
+	CONFIDENCE_THRESHOLD = 80
 
 	def __init__(self) -> None:
 		self._phrase_map = [
@@ -88,7 +88,7 @@ class VoiceCommandHandler:
 
 		# 2. Fuzzy match against all intent phrases
 		phrase_strings = [p[0] for p in self._phrase_map]
-		match = process.extractOne(text, phrase_strings, scorer=fuzz.partial_ratio)
+		match = process.extractOne(text, phrase_strings, scorer=fuzz.ratio)
 		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
 			intent_name = next(name for phrase, name in self._phrase_map if phrase == match[0])
 			print(f"VoiceCommandHandler: matched intent='{intent_name}' phrase='{match[0]}' score={match[1]}")
