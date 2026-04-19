@@ -34,8 +34,10 @@ from gpio import GPIO
 from wakeword_detection import WakeWord
 from speech_to_text import SpeechToText
 from voice_commands import VoiceCommandHandler
+from llm_service import LLM
 from animatronic_movements import Movement
 from gamepad_input import USBGamepadReader
+from usb_monitor import USBMonitor
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
 
@@ -56,9 +58,11 @@ class Kermit:
 		self.wakeword = WakeWord()
 		self.stt = SpeechToText()
 		self.voiceCommandHandler = VoiceCommandHandler()
+		self.llm = LLM();
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
+		
 		self.gamepad = USBGamepadReader(self.movements, self.web_server)
 		self.show_player = ShowPlayer(pygame)
 
@@ -72,12 +76,18 @@ class Kermit:
 		self.movements.set_default_animation(True)
 		self.wifi_management.scan()
 
+		self.load_config()
+		self.usb_monitor = USBMonitor()
+
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
 		dispatcher.connect(self.on_mirrored_mode_toggle, signal='mirrorModeToggle', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.load_config, signal='usbConfigFound', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_transcription_result, signal='transcriptionResult', sender=dispatcher.Any)
+		dispatcher.connect(self.on_llm_response, signal='llmResponse', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
@@ -93,6 +103,21 @@ class Kermit:
 		dispatcher.connect(self.on_wifi_password_required, signal='wifiPasswordRequired', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_wrong_password, signal='wifiWrongPassword', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_disconnected, signal='wifiDisconnected', sender=dispatcher.Any)
+
+	# Load config.cfg from a given path
+	def load_config(self, path: str = "") -> None:
+		if not path:
+			# Use the default path of looking at the same directory as this Python script
+			path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.cfg")
+
+		if os.path.exists(path):
+			self.config_path = path
+			print(f"Config found at {path}")
+			self.wifi_management.apply_config(path)
+			self.llm.apply_config(path)
+		else:
+			self.config_path = None
+			print(f"Warning: Config file not found at {path}. Continuing with no config.")
 
 	def run(self) -> None:
 		try:
@@ -167,6 +192,7 @@ class Kermit:
 
 	def on_connect_event(self, client_ip: str) -> None:
 		print(f"Web client connected from IP: {client_ip}")
+		self.web_server.broadcast('voiceCommandUpdate', {"id": "idle", "value": ""})
 		self.show_player.get_show_list()
 		self.web_server.broadcast('movementInfo', self.movements.get_all_movement_info())
 		# Send the cached scan results and current wifi status to the newly connected client, then kick off a fresh scan
@@ -185,17 +211,24 @@ class Kermit:
 
 	def on_transcription_result(self, text: str) -> None:
 		print(f"Heard: {text}")
+		
 		# TODO: send to LLM
 		if( not self.voiceCommandHandler.parse(text)):
-			pring("TODO: LLM MAGIC!")
+			self.llm.send(text)
 
 		self.wakeword.set_enabled(True)
+
+	def on_llm_response(self, response: str) -> None:
+		print(f"LLM Response: {response}")
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
 			self.movements.execute_movement(str(key).lower(), val)
 		except Exception as e:
 			print(f"Invalid key: {e}")
+
+	def on_update_status(self, id: str, value: any = None) -> None:
+		self.web_server.broadcast('statusUpdate', {"id": id, "value": value})
 
 	def on_mirrored_mode(self, val: any) -> None:
 		self.movements.set_mirrored(val)

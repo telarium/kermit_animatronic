@@ -60,7 +60,7 @@ function handleMobileKeypadVisibility() {
  * @param {string} id - The status identifier.
  * @param {string} value - The value associated with the status.
  */
-function updateVoiceCommandStatus(id, value) {
+function updateStatus(id, value) {
 	let statusText = "";
 
 	switch (id) {
@@ -72,9 +72,6 @@ function updateVoiceCommandStatus(id, value) {
 			break;
 		case "command":
 			statusText = `Executing command '${value}'`;
-			break;
-		case "transcribing":
-			statusText = "Transcribing...";
 			break;
 		case "llmSend":
 			statusText = `Heard '${value}'`;
@@ -115,7 +112,7 @@ function updateVoiceCommandStatus(id, value) {
 	}
 }
 
-socket.on('voiceCommandUpdate', ({ id, value }) => updateVoiceCommandStatus(id, value));
+socket.on('statusUpdate', ({ id, value }) => updateStatus(id, value));
 
 // Handle show list loading
 let showList = [];

@@ -43,7 +43,7 @@ body {
     line-height: 1;
     -webkit-text-size-adjust: none;
     -ms-overflow-style: scrollbar;
-    background: #43930e;
+    background: #487a27;
 }
 
 body, input, select, textarea {
@@ -145,13 +145,13 @@ hr {
 }
 
 /* =========================================================
-   Cards  (replaces the old .box)
+   Cards
    ========================================================= */
 .card {
     background: #0d2b06;
     border-radius: 6px;
     padding: 1.25em 1.5em;
-    opacity: 0.95;
+    opacity: 0.9;
     text-align: center;
 }
 

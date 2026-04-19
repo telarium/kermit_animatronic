@@ -10,19 +10,44 @@ WIFI_INTERFACE = "wlan0"
 
 
 class WifiManagement:
-	def __init__(self, config_file: str = "config.cfg") -> None:
+	def __init__(self) -> None:
 		self._monitor_thread: Optional[threading.Thread] = None
 		self._stop_monitor = threading.Event()
 		self._cached_networks: List[Dict] = []
 
 		self._start_disconnect_monitor()
-		self._connect_from_config(config_file)
 
 		print("WifiManagement: initialized.")
 
 	# -------------------------------------------------------------------------
 	# Public API
 	# -------------------------------------------------------------------------
+
+	def apply_config(self, path):
+		config = configparser.ConfigParser()
+		try:
+			config.read(path)
+		except configparser.Error as e:
+			print(f"WifiManagement: failed to parse config at '{path}': {e}")
+			return
+
+		preferred_ssid = config.get("WiFi", "WifiName", fallback="").strip()
+		preferred_password = config.get("WiFi", "Password", fallback="").strip() or None
+
+		if not preferred_ssid:
+			print("WifiManagement: apply_config — no WifiName set, doing nothing.")
+			return
+
+		if preferred_password:
+			print(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' with password...")
+		else:
+			print(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' (no password)...")
+
+		threading.Thread(
+			target=self._startup_connect,
+			args=(preferred_ssid, preferred_password),
+			daemon=True
+		).start()
 
 	def scan(self) -> None:
 		"""Trigger a WiFi scan in a background thread.
@@ -275,30 +300,6 @@ class WifiManagement:
 				return ssid
 
 		return None
-
-	# -------------------------------------------------------------------------
-	# Internal: startup auto-connect from config
-	# -------------------------------------------------------------------------
-
-	def _connect_from_config(self, config_file: str) -> None:
-		"""On startup, try to connect to the preferred network in config.cfg.
-		Falls back to any previously known NM network if that fails."""
-		config = configparser.ConfigParser()
-		config.read(config_file)
-
-		preferred_ssid = config.get("WiFi", "PreferredSSID", fallback="").strip()
-		preferred_password = config.get("WiFi", "Password", fallback="").strip() or None
-
-		if preferred_ssid:
-			print(f"WifiManagement: trying preferred network '{preferred_ssid}'...")
-			threading.Thread(
-				target=self._startup_connect,
-				args=(preferred_ssid, preferred_password),
-				daemon=True
-			).start()
-		else:
-			print("WifiManagement: no preferred network in config, trying known networks...")
-			threading.Thread(target=self._fallback_connect, daemon=True).start()
 
 	def _startup_connect(self, ssid: str, password: Optional[str]) -> None:
 		"""Try preferred SSID; fall back to known NM profiles on failure."""

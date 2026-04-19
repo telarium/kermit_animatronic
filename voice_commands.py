@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from rapidfuzz import process, fuzz
-
+from pydispatch import dispatcher
 
 class VoiceCommandHandler:
 
@@ -124,6 +124,7 @@ class VoiceCommandHandler:
 		}
 		handler = handlers.get(intent)
 		if handler:
+			dispatcher.send(signal="updateStatus", id="command", value=intent)
 			handler()
 
 	# --- intent handlers ---

@@ -56,6 +56,7 @@ class WakeWord:
 			self._stop_event.clear()
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
+			dispatcher.send(signal="updateStatus", id="idle", value="")
 			print("WakeWord: listening started.")
 		elif not enabled and self._enabled:
 			self._enabled = False
@@ -95,6 +96,7 @@ class WakeWord:
 				score = prediction.get("hey_ker_mit", 0)
 				if score > self.THRESHOLD:
 					print(f"'Hey Kermit' detected! (score: {score:.2f})")
+					dispatcher.send(signal="updateStatus", id="wakeWord", value="")
 					dispatcher.send(signal="wakewordEvent")
 					self._oww.reset()
 					if self.on_detected:
