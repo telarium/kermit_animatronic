@@ -2,11 +2,27 @@
 import os
 import sys
 import warnings
+import subprocess
+
+def _find_usb_audio_card() -> str:
+	"""Find the USB audio card number from aplay -l and return plughw:X,0."""
+	try:
+		result = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
+		for line in result.stdout.splitlines():
+			if "usb audio" in line.lower():
+				card_num = line.split(":")[0].replace("card", "").strip()
+				print(f"Audio: found USB audio at card {card_num}")
+				return f"plughw:{card_num},0"
+	except Exception as e:
+		print(f"Audio: error finding USB audio card: {e}")
+	print("Audio: USB audio not found, falling back to plughw:0,0")
+	return "plughw:0,0"
 
 # Suppress noise — must be before any imports that touch audio
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
-os.environ['SDL_AUDIODRIVER'] = 'dummy'  # No audio output device yet
+os.environ['SDL_AUDIODRIVER'] = 'alsa'
+os.environ['AUDIODEV'] = _find_usb_audio_card()
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -20,7 +36,7 @@ os.dup2(_devnull.fileno(), 2)
 
 # Init pygame mixer FIRST before anything else touches ALSA
 import pygame
-pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
+pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=8192)
 pygame.mixer.init()
 
 # Now safe to import everything else
@@ -36,6 +52,7 @@ from speech_to_text import SpeechToText
 from text_to_speech import TextToSpeech
 from voice_commands import VoiceCommandHandler
 from llm_service import LLM
+from voice_player import VoicePlayer
 from animatronic_movements import Movement
 from gamepad_input import USBGamepadReader
 from usb_monitor import USBMonitor
@@ -61,6 +78,7 @@ class Kermit:
 		self.tts = TextToSpeech()
 		self.voiceCommandHandler = VoiceCommandHandler()
 		self.llm = LLM();
+		self.voice_player = VoicePlayer(pygame)
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
@@ -89,7 +107,9 @@ class Kermit:
 		dispatcher.connect(self.load_config, signal='usbConfigFound', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_transcription_result, signal='transcriptionResult', sender=dispatcher.Any)
-		dispatcher.connect(self.on_llm_response, signal='llmResponse', sender=dispatcher.Any)
+		dispatcher.connect(self.on_execute_text_to_speech, signal='executeTTS', sender=dispatcher.Any)
+		dispatcher.connect(self.on_text_to_speech_ready, signal='ttsEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_voice_playback_event, signal='voicePlaybackEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
@@ -98,7 +118,6 @@ class Kermit:
 		dispatcher.connect(self.on_mirrored_mode, signal='onMirroredMode', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_playback_midi_event, signal='showPlaybackMidiEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
-		dispatcher.connect(self.on_web_tts_event, signal='webTTSEvent', sender=dispatcher.Any)
 		# WiFi signals from WifiManagement
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
@@ -221,9 +240,20 @@ class Kermit:
 
 		self.wakeword.set_enabled(True)
 
-	def on_llm_response(self, response: str) -> None:
-		print(f"Response: {response}")
-		self.tts.speak(response)
+	def on_execute_text_to_speech(self, text: str) -> None:
+		print(f"Response: {text}")
+		self.tts.speak(text)
+
+	def on_text_to_speech_ready(self, file: str) -> None:
+		self.voice_player.play(file)
+
+	def on_voice_playback_event(self, bPlaying: bool) -> None:
+		if bPlaying:
+			print("PLAYING!")
+			self.wakeword.set_enabled(False)
+		else:
+			self.wakeword.set_enabled(True)
+			print("DONE!")
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:

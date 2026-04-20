@@ -65,7 +65,7 @@ class WebServer:
 
 	@socketio.on('onWebTTSSubmit')
 	def web_tts_submit(inputText: str) -> None:
-		dispatcher.send(signal="webTTSEvent", val=inputText)
+		dispatcher.send(signal="executeTTS", text=inputText)
 
 	def __init__(self) -> None:
 		# Create a thread for HTTP server only

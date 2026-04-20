@@ -101,5 +101,5 @@ class LLM:
 		self._on_response(response)
 
 	def _on_response(self, response: str) -> None:
-		dispatcher.send(signal="llmResponse", response=response)
+		dispatcher.send(signal="executeTTS", text=response)
 		print("RESPONSE")
