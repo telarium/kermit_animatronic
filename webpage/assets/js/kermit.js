@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function handleMobileKeypadVisibility() {
 	if (!isMobileDevice()) return;
 
-	const keypadImages = ['images/keypad-l.png', 'images/keypad-r.png'];
+	const keypadImages = ['images/keypad-l.png'];
 	keypadImages.forEach(src => {
 		const img = document.querySelector(`img[src="${src}"]`);
 		if (img) {
@@ -61,52 +61,28 @@ function handleMobileKeypadVisibility() {
  * @param {string} value - The value associated with the status.
  */
 function updateStatus(id, value) {
-	let statusText = "";
+	let statusText = id + ": <span>" + value + "</span>";
 
-	switch (id) {
-		case "idle":
-			statusText = "Waiting for 'Hey Kermit'...";
-			break;
-		case "wakeWord":
-			statusText = "Listening...";
-			break;
-		case "command":
-			statusText = `Executing command '${value}'`;
-			break;
-		case "llmSend":
-			statusText = `Heard '${value}'`;
-			break;
-		case "llmReceive":
-			statusText = "Responding...";
-			populateTTSInput(value);
-			break;
-		case "micNotFound":
-			statusText = "No microphone detected";
-			break;
-		case "error":
-			statusText = "Disabled!";
-			break;
-		case "ttsSubmitted":
-			statusText = "Processing...";
-			break;
-		case "speaking":
-			statusText = "Responding...";
-			break;
-		case "ttsComplete":
-			statusText = "Waiting...";
-			const submitButton = document.getElementById('submitTTSButton');
-			if (submitButton) {
-				submitButton.disabled = false;
-				submitButton.classList.remove('disabled');
-			}
-			break;
-		default:
-			statusText = "Unknown status: " + id;
+	if( value.includes("Hey Kermit")) {
+		const submitButton = document.getElementById('submitTTSButton');
+		if (submitButton) {
+			submitButton.disabled = false;
+			submitButton.classList.remove('disabled');
+		}
+	} else if( value.includes("Listening")) {
+		const submitButton = document.getElementById('submitTTSButton');
+		if (submitButton) {
+			submitButton.disabled = true;
+			submitButton.classList.add('disabled');
+		}
+	} else if( id.includes("Responding")) {
+		statusText = id + ": <span>Responding...</span>";
+		populateTTSInput(value);
 	}
 
 	const statusElement = document.getElementById('voiceCommandStatus');
 	if (statusElement) {
-		statusElement.innerHTML = `Voice Command Status: <span>${statusText}</span>`;
+		statusElement.innerHTML = statusText;
 	} else {
 		console.warn('Voice Command Status element not found!');
 	}
@@ -243,50 +219,6 @@ function setupModeCheckboxes() {
 	} else {
 		console.warn('Mirrored Mode Checkbox not found!');
 	}
-
-	if (retroModeCheckbox) {
-		const retroModeEnabled = localStorage.getItem('retroModeEnabled') === 'true';
-		retroModeCheckbox.checked = retroModeEnabled;
-
-		if (retroModeEnabled) {
-			const mainContent = document.getElementById('main');
-			if (mainContent) {
-				mainContent.classList.add('retro-mode-active');
-			}
-		}
-
-		retroModeCheckbox.addEventListener('change', function () {
-			const mainContent = document.getElementById('main');
-			if (mainContent) {
-				if (this.checked) {
-					mainContent.classList.add('retro-mode-active');
-				} else {
-					mainContent.classList.remove('retro-mode-active');
-				}
-				socket.emit('onRetroMode', this.checked);
-				localStorage.setItem('retroModeEnabled', this.checked);
-			} else {
-				console.warn('Main content element not found!');
-			}
-		});
-	} else {
-		console.warn('Retro Mode Checkbox not found!');
-	}
-
-	if (headNodInvertedCheckbox) {
-		bHeadInvertedEnabled = localStorage.getItem('headInvertedEnabled') === 'true';
-		headNodInvertedCheckbox.checked = bHeadInvertedEnabled;
-
-		headNodInvertedCheckbox.addEventListener('change', function () {
-			bHeadInvertedEnabled = this.checked;
-			localStorage.setItem('headInvertedEnabled', this.checked);
-			socket.emit('onHeadNodInverted', this.checked);
-			bInvertHeadNod = this.checked;
-			socket.emit('onKeyPress', { keyVal: 's', val: Number(bInvertHeadNod) });
-		});
-	} else {
-		console.warn('Head Inverted Checkbox not found!');
-	}
 }
 
 function performFlipAnimation() {
@@ -345,10 +277,7 @@ function submitTTS() {
 
 	if (inputText) {
 		console.log(`Submitted TTS Text: ${inputText}`);
-		if (submitButton) {
-			submitButton.disabled = true;
-			submitButton.classList.add('disabled');
-		}
+		
 
 		socket.emit('onWebTTSSubmit', inputText);
 	} else {

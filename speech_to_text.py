@@ -71,7 +71,7 @@ class SpeechToText:
 
 	def _capture_and_transcribe(self) -> None:
 		self._listening = True
-		print("SpeechToText: listening...")
+		dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Listening...")
 
 		arecord_cmd = [
 			"arecord",

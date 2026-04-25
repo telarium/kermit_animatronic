@@ -13,6 +13,10 @@ class TextToSpeech:
 	def __init__(self) -> None:
 		self.elevenlabs_key: str = ""
 		self.elevenlabs_voice_id: str = ""
+		self.elevenlabs_stability: float = 0.35
+		self.elevenlabs_similarity_boost: float = 0.75
+		self.elevenlabs_style: float = 0.3
+		self.elevenlabs_use_high_quality_slow_model: bool = False
 		print("Set up TextToSpeech")
 
 	# -------------------------------------------------------------------------
@@ -29,6 +33,11 @@ class TextToSpeech:
 
 		self.elevenlabs_key      = config.get("TextToSpeech", "ElevenLabsKey",     fallback="").strip()
 		self.elevenlabs_voice_id = config.get("TextToSpeech", "ElevenLabsVoiceID", fallback="").strip()
+		self.elevenlabs_stability             = config.getfloat("TextToSpeech", "ElevenLabsStability",              fallback=0.35)
+		self.elevenlabs_similarity_boost      = config.getfloat("TextToSpeech", "ElevenLabsSimularityBoost",        fallback=0.75)
+		self.elevenlabs_style                 = config.getfloat("TextToSpeech", "ElevenLabsStyle",                  fallback=0.3)
+		self.elevenlabs_use_high_quality_slow_model = config.getboolean("TextToSpeech", "ElevenLabsUseHighQualitySlowModel", fallback=False)
+		print(f"TextToSpeech: voice settings applied (stability={self.elevenlabs_stability}, similarity_boost={self.elevenlabs_similarity_boost}, style={self.elevenlabs_style}, high_quality={self.elevenlabs_use_high_quality_slow_model})")
 
 	def speak(self, text: str) -> None:
 		"""Convert text to speech asynchronously. Downloads audio to a temp file."""
@@ -54,15 +63,15 @@ class TextToSpeech:
 					"Content-Type": "application/json",
 				},
 				json={
-					"text": text,
-					"model_id": "eleven_turbo_v2_5",
-					"voice_settings": {
-						"stability": 0.35,
-						"similarity_boost": 0.75,
-						"style": 0.3,
-						"use_speaker_boost": True,
-					},
+				"text": text,
+				"model_id": "eleven_turbo_v2_5" if not self.elevenlabs_use_high_quality_slow_model else "eleven_multilingual_v2",
+				"voice_settings": {
+					"stability": self.elevenlabs_stability,
+					"similarity_boost": self.elevenlabs_similarity_boost,
+					"style": self.elevenlabs_style,
+					"use_speaker_boost": True,
 				},
+			},
 				timeout=30,
 			)
 			response.raise_for_status()

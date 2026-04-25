@@ -15,7 +15,6 @@ class WakeWord:
 	CHANNELS = 2
 	RATE = 16000
 	TARGET_RATE = 16000
-	THRESHOLD = 0.3
 
 	def __init__(self, on_detected=None):
 		"""
@@ -26,6 +25,7 @@ class WakeWord:
 		self._enabled = False
 		self._thread = None
 		self._stop_event = threading.Event()
+		self.threshold: float = 0.3
 
 		# Suppress ALSA noise during pyaudio and model init
 		_devnull = open(os.devnull, 'w')
@@ -42,6 +42,22 @@ class WakeWord:
 		_devnull.close()
 
 		print(f"WakeWord: model loaded from {self.MODEL_PATH}")
+
+	# -------------------------------------------------------------------------
+	# Public API
+	# -------------------------------------------------------------------------
+
+	def apply_config(self, path: str) -> None:
+		import configparser
+		config = configparser.ConfigParser()
+		try:
+			config.read(path)
+		except configparser.Error as e:
+			print(f"WakeWord: failed to parse config at '{path}': {e}")
+			return
+
+		self.threshold = config.getfloat("Wakeword", "Threshold", fallback=0.3)
+		print(f"WakeWord: threshold set to {self.threshold}")
 
 	def _find_device_index(self) -> int:
 		"""Find the microphone by name, regardless of reboot-assigned index."""
@@ -60,7 +76,7 @@ class WakeWord:
 			self._stop_event.clear()
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
-			dispatcher.send(signal="updateStatus", id="idle", value="")
+			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
 			print("WakeWord: listening started.")
 		elif not enabled and self._enabled:
 			self._enabled = False
@@ -96,9 +112,8 @@ class WakeWord:
 				audio_np = audio_np[:, 1]
 				prediction = self._oww.predict(audio_np)
 				score = prediction.get("hey_ker_mit", 0)
-				if score > self.THRESHOLD:
+				if score > self.threshold:
 					print(f"'Hey Kermit' detected! (score: {score:.2f})")
-					dispatcher.send(signal="updateStatus", id="wakeWord", value="")
 					dispatcher.send(signal="wakewordEvent")
 					self._oww.reset()
 					if self.on_detected:

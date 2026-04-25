@@ -45,6 +45,8 @@ class LLM:
 	def _send(self, query: str) -> None:
 		response = None
 
+		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=str)
+
 		# Try Anthropic (Claude) first
 		if self.anthropic_key:
 			try:
@@ -102,4 +104,4 @@ class LLM:
 
 	def _on_response(self, response: str) -> None:
 		dispatcher.send(signal="executeTTS", text=response)
-		print("RESPONSE")
+		dispatcher.send(signal="updateStatus", id="A.I. Responding", value=response)

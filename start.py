@@ -121,6 +121,8 @@ class Kermit:
 		self.load_config()
 		self.usb_monitor = USBMonitor()
 
+		dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
+
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
@@ -157,6 +159,7 @@ class Kermit:
 			self.wifi_management.apply_config(path)
 			self.llm.apply_config(path)
 			self.tts.apply_config(path)
+			self.wakeword.apply_config(path)
 		else:
 			self.config_path = None
 			print(f"Warning: Config file not found at {path}. Continuing with no config.")
@@ -251,7 +254,7 @@ class Kermit:
 		print(f"Heard: {text}")
 		if not self.voiceCommandHandler.parse(text):
 			self.llm.send(text)
-		self.wakeword.set_enabled(True)
+		self.wakeword.set_enabled(False)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
 		print(f"Response: {text}")
@@ -262,11 +265,11 @@ class Kermit:
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
-			print("PLAYING!")
+			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
 			self.wakeword.set_enabled(False)
 		else:
 			self.wakeword.set_enabled(True)
-			print("DONE!")
+			
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
