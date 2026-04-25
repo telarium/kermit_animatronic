@@ -15,7 +15,7 @@ class WakeWord:
 	CHANNELS = 2
 	RATE = 16000
 	TARGET_RATE = 16000
-	THRESHOLD = 0.5
+	THRESHOLD = 0.3
 
 	def __init__(self, on_detected=None):
 		"""
@@ -31,7 +31,11 @@ class WakeWord:
 		_devnull = open(os.devnull, 'w')
 		_old_stderr = os.dup(2)
 		os.dup2(_devnull.fileno(), 2)
-		self._oww = Model(wakeword_models=[self.MODEL_PATH], inference_framework="onnx")
+		self._oww = Model(
+			wakeword_models=[self.MODEL_PATH],
+			inference_framework="onnx",
+			vad_threshold=0.0
+		)
 		self._pa = pyaudio.PyAudio()
 		os.dup2(_old_stderr, 2)
 		os.close(_old_stderr)
@@ -89,7 +93,7 @@ class WakeWord:
 			while not self._stop_event.is_set():
 				audio = stream.read(self.CHUNK, exception_on_overflow=False)
 				audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
-				audio_np = audio_np[:, 0]
+				audio_np = audio_np[:, 1]
 				prediction = self._oww.predict(audio_np)
 				score = prediction.get("hey_ker_mit", 0)
 				if score > self.THRESHOLD:
