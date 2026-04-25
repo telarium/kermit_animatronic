@@ -129,21 +129,24 @@ class VoicePlayer:
 		print(f"VoicePlayer: done")
 		
 	def _load_audio_data(self, file_path: str):
-			"""Load audio data and sample rate from mp3, ogg, or wav."""
-			if file_path.endswith('.mp3'):
-				audio = AudioSegment.from_mp3(file_path)
-			elif file_path.endswith('.ogg'):
-				audio = AudioSegment.from_ogg(file_path)
-			elif file_path.endswith('.wav'):
-				audio = AudioSegment.from_wav(file_path)
-			else:
-				raise ValueError(f"Unsupported file format: {file_path}")
+		"""Load audio data and sample rate from mp3, ogg, or wav."""
+		if file_path.endswith('.mp3'):
+			audio = AudioSegment.from_mp3(file_path)
+		elif file_path.endswith('.ogg'):
+			audio = AudioSegment.from_ogg(file_path)
+		elif file_path.endswith('.wav'):
+			audio = AudioSegment.from_wav(file_path)
+		else:
+			raise ValueError(f"Unsupported file format: {file_path}")
 
-			wav_io = io.BytesIO()
-			audio.export(wav_io, format="wav")
-			wav_io.seek(0)
-			sample_rate, data = wavfile.read(wav_io)
-			return sample_rate, data
+		# Normalize to 16-bit PCM so scipy can handle it regardless of source format
+		audio = audio.set_sample_width(2)
+
+		wav_io = io.BytesIO()
+		audio.export(wav_io, format="wav")
+		wav_io.seek(0)
+		sample_rate, data = wavfile.read(wav_io)
+		return sample_rate, data
 
 	def _calculate_rms(self, data: np.ndarray, sample_rate: int):
 		"""Calculate normalized RMS values over time."""

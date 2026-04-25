@@ -3,11 +3,13 @@ import threading
 import time
 import configparser
 import difflib
+import socket
+import fcntl
+import struct
 from typing import Optional, List, Dict
 from pydispatch import dispatcher
 
-WIFI_INTERFACE = "wlan0"
-
+WIFI_INTERFACE = "wlP1p1s0"
 
 class WifiManagement:
 	def __init__(self) -> None:
@@ -54,6 +56,50 @@ class WifiManagement:
 		Dispatches 'wifiScanComplete' with a list of dicts: [{ssid, signal_strength}]
 		when finished."""
 		threading.Thread(target=self._do_scan, daemon=True).start()
+
+	def get_ip(self) -> str:
+		"""Return an active IP address — WiFi first, then Ethernet. Returns '0' if neither is available."""
+		SIOCGIFADDR = 0x8915
+
+		def _get_interface_ip(iface: str) -> Optional[str]:
+			try:
+				s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				ip = socket.inet_ntoa(fcntl.ioctl(
+					s.fileno(), SIOCGIFADDR,
+					struct.pack('256s', iface[:15].encode())
+				)[20:24])
+				return ip if not ip.startswith("127.") else None
+			except Exception:
+				return None
+
+		def _get_all_interfaces() -> list:
+			try:
+				result = subprocess.run(["ip", "-o", "-4", "addr", "show"],
+					capture_output=True, text=True, timeout=5)
+				ifaces = []
+				for line in result.stdout.splitlines():
+					parts = line.split()
+					if len(parts) >= 4:
+						ifaces.append(parts[1])
+				return ifaces
+			except Exception:
+				return []
+
+		# Try WiFi first
+		wifi_ip = _get_interface_ip(WIFI_INTERFACE)
+		if wifi_ip:
+			return wifi_ip
+
+		# Try all other interfaces, skip loopback and usb
+		for iface in _get_all_interfaces():
+			if iface == WIFI_INTERFACE or iface.startswith("lo") or iface.startswith("usb"):
+				continue
+			ip = _get_interface_ip(iface)
+			if ip:
+				return ip
+
+		print("WifiManagement: get_ip — no active network interface found.")
+		return "0"
 
 	def get_wifi_access_points(self) -> List[Dict]:
 		"""Return the cached list of networks from the last completed scan.
@@ -154,6 +200,13 @@ class WifiManagement:
 		target_ssid = self._fuzzy_match_ssid(ssid_query)
 		if not target_ssid:
 			print(f"WifiManagement: no match found for '{ssid_query}'")
+			return
+
+		# Already connected to this network — do nothing
+		current = self.get_current_ssid()
+		if current and current.lower() == target_ssid.lower():
+			print(f"WifiManagement: already connected to '{current}', skipping.")
+			dispatcher.send(signal="wifiConnected", ssid=current)
 			return
 
 		print(f"WifiManagement: connecting to '{target_ssid}'...")

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import random
 from rapidfuzz import process, fuzz
 from pydispatch import dispatcher
 
@@ -27,6 +28,7 @@ class VoiceCommandHandler:
 			"what's your ip address", "what is your ip address",
 			"what's your ip", "tell me your ip", "ip address please",
 			"give me your ip", "your ip address", "network address",
+			"ip address", "ip", "which are IP address",
 		],
 		"get_wifi_network": [
 			"what's your wifi network", "what is your wifi network",
@@ -55,6 +57,11 @@ class VoiceCommandHandler:
 		"sing the song", "play", "sing",
 	]
 
+	CONNECT_WIFI_PREFIXES = [
+		"connect to network", "connect to wifi", "log in to wifi",
+		"log in to network", "connect to", "log in to",
+	]
+
 	# Generic words that should NOT be treated as song names
 	PLAY_BY_NAME_BLOCKLIST = {
 		"something", "music", "a song", "for me", "anything", "a tune",
@@ -63,14 +70,15 @@ class VoiceCommandHandler:
 
 	CONFIDENCE_THRESHOLD = 80
 
-	def __init__(self) -> None:
+	def __init__(self, wifi_management) -> None:
+		self._wifi_management = wifi_management
 		self._phrase_map = [
 			(phrase, intent_name)
 			for intent_name, phrases in self.INTENTS.items()
 			for phrase in phrases
 		]
-		# Sort prefixes longest-first so more specific ones match before shorter ones
 		self._sorted_prefixes = sorted(self.PLAY_BY_NAME_PREFIXES, key=len, reverse=True)
+		self._sorted_connect_prefixes = sorted(self.CONNECT_WIFI_PREFIXES, key=len, reverse=True)
 		print("VoiceCommandHandler: initialized.")
 
 	def parse(self, transcript: str) -> bool:
@@ -78,7 +86,7 @@ class VoiceCommandHandler:
 		Attempt to detect a command in the transcript.
 		Returns True if a confident match was found and handled, False otherwise.
 		"""
-		text = transcript.lower().strip()
+		text = transcript.lower().strip().rstrip(".,!?")
 
 		# 1. Check play-by-name first (e.g. "play Rainbow Connection")
 		song_name = self._match_play_by_name(text)
@@ -86,7 +94,13 @@ class VoiceCommandHandler:
 			self._handle_play_by_name(song_name)
 			return True
 
-		# 2. Fuzzy match against all intent phrases
+		# 2. Check connect-to-wifi prefix (e.g. "connect to MyNetwork")
+		ssid_name = self._match_connect_wifi(text)
+		if ssid_name is not None:
+			self._handle_connect_wifi(ssid_name)
+			return True
+
+		# 3. Fuzzy match against all intent phrases
 		phrase_strings = [p[0] for p in self._phrase_map]
 		match = process.extractOne(text, phrase_strings, scorer=fuzz.ratio)
 		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
@@ -110,6 +124,18 @@ class VoiceCommandHandler:
 					return remainder
 		return None
 
+	def _match_connect_wifi(self, text: str) -> str | None:
+		"""
+		If the transcript starts with a connect-wifi prefix and has a meaningful
+		remainder, return the remainder as the SSID. Otherwise return None.
+		"""
+		for prefix in self._sorted_connect_prefixes:
+			if text.startswith(prefix + " ") or text == prefix:
+				remainder = text[len(prefix):].strip()
+				if remainder:
+					return remainder
+		return None
+
 	def _dispatch_intent(self, intent: str) -> None:
 		handlers = {
 			"look_left":        self._handle_look_left,
@@ -124,7 +150,7 @@ class VoiceCommandHandler:
 		}
 		handler = handlers.get(intent)
 		if handler:
-			dispatcher.send(signal="updateStatus", id="command", value=intent)
+			dispatcher.send(signal="updateStatus", id="Command", value=intent)
 			handler()
 
 	# --- intent handlers ---
@@ -153,28 +179,53 @@ class VoiceCommandHandler:
 		print(f"VoiceCommandHandler: play by name — '{song_name}'")
 		# TODO: pass song_name to show resolver class
 
+	def _handle_connect_wifi(self, ssid: str) -> None:
+		print(f"VoiceCommandHandler: connecting to wifi network '{ssid}'")
+		self._wifi_management.connect(ssid)
+
 	def _handle_get_ip(self) -> None:
-		import socket
 		try:
-			ip = socket.gethostbyname(socket.gethostname())
+			ip = self._wifi_management.get_ip()
 		except Exception:
-			ip = "unknown"
-		print(f"VoiceCommandHandler: IP address is {ip}")
-		# TODO: dispatcher.send(signal='ttsSpeak', text=f"My IP address is {ip}")
+			ip = "0"
+
+		if ip == "0":
+			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
+			return
+
+		EXACT_FILES = {
+			10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+			30, 40, 50, 60, 70, 80, 90, 100
+		}
+
+		files = ["ip_prefix.ogg"]
+		for i, octet in enumerate(ip.split(".")):
+			n = int(octet)
+			if n in EXACT_FILES:
+				files.append(f"number_{n}.wav")
+			else:
+				for digit in octet:
+					files.append(f"number_{digit}.wav")
+			if i < 3:
+				files.append("dot.wav")
+
+		dispatcher.send(signal="playVoiceSequence", fileList=files)
 
 	def _handle_get_wifi_network(self) -> None:
-		import subprocess
-		try:
-			result = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True)
-			ssid = result.stdout.strip() or "unknown"
-		except Exception:
-			ssid = "unknown"
-		print(f"VoiceCommandHandler: wifi network is {ssid}")
-		# TODO: dispatcher.send(signal='ttsSpeak', text=f"I'm connected to {ssid}")
+		ssid = self._wifi_management.get_current_ssid()
+		if ssid:
+			responses = [
+				f"Well - currently I'm connected to {ssid}",
+				f"Right now I'm connected to {ssid}",
+				f"Oh, I'm hooked up to {ssid}",
+				f"My wifi network is {ssid}",
+			]
+			dispatcher.send(signal="executeTTS", text=random.choice(responses))
+		else:
+			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 
 	def _handle_who_are_you(self) -> None:
-		print("VoiceCommandHandler: who are you")
-		# TODO: dispatcher.send(signal='ttsSpeak', text="I'm Kermit the Frog!")
+		dispatcher.send(signal="playVoiceFile", file="who_are_you.ogg")
 
 	def _handle_greeting(self) -> None:
 		print("VoiceCommandHandler: greeting")

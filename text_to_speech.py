@@ -82,7 +82,7 @@ class TextToSpeech:
 			tmp.write(response.content)
 			tmp.close()
 
-			dispatcher.send(signal="ttsEvent", file=tmp.name)
+			dispatcher.send(signal="playVoiceFile", file=tmp.name)
 
 			print(f"TextToSpeech: audio saved to {tmp.name}")
 

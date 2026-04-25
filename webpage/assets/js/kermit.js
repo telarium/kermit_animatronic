@@ -277,7 +277,10 @@ function submitTTS() {
 
 	if (inputText) {
 		console.log(`Submitted TTS Text: ${inputText}`);
-		
+		if (submitButton) {
+			submitButton.disabled = true;
+			submitButton.classList.add('disabled');
+		}
 
 		socket.emit('onWebTTSSubmit', inputText);
 	} else {

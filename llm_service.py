@@ -42,7 +42,13 @@ class LLM:
 	# Internal
 	# -------------------------------------------------------------------------
 
+	def _on_fail(self):
+		print("OHNO!")
+		dispatcher.send(signal="playVoiceFile", file="no_ai.ogg")
+
 	def _send(self, query: str) -> None:
+		self._on_fail()
+		return
 		response = None
 
 		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=str)

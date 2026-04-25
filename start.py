@@ -98,12 +98,12 @@ class Kermit:
 		self.wakeword = WakeWord()
 		self.stt = SpeechToText()
 		self.tts = TextToSpeech()
-		self.voiceCommandHandler = VoiceCommandHandler()
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame)
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
+		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)
 
 		self.gamepad = USBGamepadReader(self.movements, self.web_server)
 		self.show_player = ShowPlayer(pygame)
@@ -121,8 +121,6 @@ class Kermit:
 		self.load_config()
 		self.usb_monitor = USBMonitor()
 
-		dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
-
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
@@ -132,7 +130,8 @@ class Kermit:
 		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_transcription_result, signal='transcriptionResult', sender=dispatcher.Any)
 		dispatcher.connect(self.on_execute_text_to_speech, signal='executeTTS', sender=dispatcher.Any)
-		dispatcher.connect(self.on_text_to_speech_ready, signal='ttsEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_voice_play, signal='playVoiceFile', sender=dispatcher.Any)
+		dispatcher.connect(self.on_voice_play_sequence, signal='playVoiceSequence', sender=dispatcher.Any)
 		dispatcher.connect(self.on_voice_playback_event, signal='voicePlaybackEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
@@ -253,23 +252,31 @@ class Kermit:
 	def on_transcription_result(self, text: str) -> None:
 		print(f"Heard: {text}")
 		if not self.voiceCommandHandler.parse(text):
+			print("SEND LLM!")
 			self.llm.send(text)
-		self.wakeword.set_enabled(False)
+			self.wakeword.set_enabled(False)
+		else:
+			self.wakeword.set_enabled(True)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
 		print(f"Response: {text}")
 		self.tts.speak(text)
 
-	def on_text_to_speech_ready(self, file: str) -> None:
+	def on_voice_play(self, file: str) -> None:
+		print("PLAY FILE")
+		print(file)
 		self.voice_player.play(file)
+
+	def on_voice_play_sequence(self, fileList) -> None:
+		self.voice_player.play_sequence(fileList)
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
-			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
+			print("PLAYING!")
 			self.wakeword.set_enabled(False)
 		else:
 			self.wakeword.set_enabled(True)
-			
+			print("DONE!")
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
