@@ -4,12 +4,13 @@ import sys
 import warnings
 import subprocess
 
+
 def _find_usb_audio_card() -> str:
-	"""Find the USB audio card number from aplay -l and return plughw:X,0."""
+	"""Find the USB audio output card number from aplay -l and return plughw:X,0."""
 	try:
 		result = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
 		for line in result.stdout.splitlines():
-			if "usb audio" in line.lower():
+			if "usb audio" in line.lower() and "respeaker" not in line.lower():
 				card_num = line.split(":")[0].replace("card", "").strip()
 				print(f"Audio: found USB audio at card {card_num}")
 				return f"plughw:{card_num},0"
@@ -17,6 +18,24 @@ def _find_usb_audio_card() -> str:
 		print(f"Audio: error finding USB audio card: {e}")
 	print("Audio: USB audio not found, falling back to plughw:0,0")
 	return "plughw:0,0"
+
+
+def _init_respeaker() -> None:
+	"""Clear ReSpeaker configuration to ensure a clean state at startup."""
+	try:
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
+		if not os.path.exists(xvf):
+			print("ReSpeaker: xvf_host not found, skipping init.")
+			return
+		jetson_dir = os.path.dirname(xvf)
+		env = os.environ.copy()
+		env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+		subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
+		print("ReSpeaker: configuration cleared.")
+	except Exception as e:
+		print(f"ReSpeaker: init failed: {e}")
+
 
 # Suppress noise — must be before any imports that touch audio
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
@@ -28,6 +47,8 @@ os.environ["ORT_LOGGING_LEVEL"] = "3"
 if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
 warnings.filterwarnings("ignore")
+
+_init_respeaker()
 
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
 _devnull = open(os.devnull, 'w')
@@ -66,6 +87,7 @@ _devnull.close()
 
 print("Startup complete.")
 
+
 class Kermit:
 	def __init__(self) -> None:
 		self.is_running: bool = True
@@ -77,12 +99,12 @@ class Kermit:
 		self.stt = SpeechToText()
 		self.tts = TextToSpeech()
 		self.voiceCommandHandler = VoiceCommandHandler()
-		self.llm = LLM();
+		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame)
 		self.movements = Movement(self.gpio)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
-		
+
 		self.gamepad = USBGamepadReader(self.movements, self.web_server)
 		self.show_player = ShowPlayer(pygame)
 
@@ -125,10 +147,8 @@ class Kermit:
 		dispatcher.connect(self.on_wifi_wrong_password, signal='wifiWrongPassword', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_disconnected, signal='wifiDisconnected', sender=dispatcher.Any)
 
-	# Load config.cfg from a given path
 	def load_config(self, path: str = "") -> None:
 		if not path:
-			# Use the default path of looking at the same directory as this Python script
 			path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.cfg")
 
 		if os.path.exists(path):
@@ -145,7 +165,6 @@ class Kermit:
 		try:
 			while self.is_running:
 				time.sleep(0.005)
-
 		except Exception as e:
 			print(f"Error in main loop: {e}")
 		finally:
@@ -154,9 +173,8 @@ class Kermit:
 
 	def shutdown(self, *args) -> None:
 		try:
-			self.is_running = False  # Signal all loops to stop
+			self.is_running = False
 
-			# Stop all dependent components
 			if self.web_server:
 				self.web_server.shutdown()
 
@@ -166,7 +184,6 @@ class Kermit:
 			if self.stt:
 				self.stt.shutdown()
 
-			# Ensure all non-main threads exit before quitting pygame
 			for thread in threading.enumerate():
 				if thread is not threading.main_thread():
 					if thread.is_alive():
@@ -217,7 +234,6 @@ class Kermit:
 		self.web_server.broadcast('voiceCommandUpdate', {"id": "idle", "value": ""})
 		self.show_player.get_show_list()
 		self.web_server.broadcast('movementInfo', self.movements.get_all_movement_info())
-		# Send the cached scan results and current wifi status to the newly connected client, then kick off a fresh scan
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
@@ -233,11 +249,8 @@ class Kermit:
 
 	def on_transcription_result(self, text: str) -> None:
 		print(f"Heard: {text}")
-		
-		# TODO: send to LLM
-		if( not self.voiceCommandHandler.parse(text)):
+		if not self.voiceCommandHandler.parse(text):
 			self.llm.send(text)
-
 		self.wakeword.set_enabled(True)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
@@ -285,7 +298,6 @@ class Kermit:
 	def on_wifi_scan_complete(self, networks: list) -> None:
 		self.wifi_access_points = networks
 		self.web_server.broadcast('wifiScan', networks)
-		# Update the wifi status link with fresh signal strength now that we have scan data
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
 			match = next((n for n in networks if n['ssid'] == current_ssid), None)
@@ -294,8 +306,6 @@ class Kermit:
 
 	def on_wifi_connected(self, ssid: str) -> None:
 		print(f"WiFi connected: {ssid}")
-		# Pull signal from the cached scan rather than querying the radio,
-		# which may not have settled yet right after connecting.
 		signal_strength = 0
 		if self.wifi_access_points:
 			match = next((n for n in self.wifi_access_points if n['ssid'] == ssid), None)

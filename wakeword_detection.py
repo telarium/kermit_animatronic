@@ -2,7 +2,6 @@
 import os
 import threading
 import numpy as np
-import scipy.signal
 import pyaudio
 from pydispatch import dispatcher
 from openwakeword.model import Model
@@ -11,10 +10,10 @@ from openwakeword.model import Model
 class WakeWord:
 	MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/openwakeword/hey_ker_mit.onnx")
 
-	CHUNK = 3528        # 44100 / 16000 * 1280 — 80ms at 44100Hz
+	CHUNK = 1280        # 80ms at 16000Hz
 	FORMAT = pyaudio.paInt16
-	CHANNELS = 1
-	RATE = 44100
+	CHANNELS = 2
+	RATE = 16000
 	TARGET_RATE = 16000
 	THRESHOLD = 0.5
 
@@ -41,10 +40,11 @@ class WakeWord:
 		print(f"WakeWord: model loaded from {self.MODEL_PATH}")
 
 	def _find_device_index(self) -> int:
-		"""Find the USB microphone by name, regardless of reboot-assigned index."""
+		"""Find the microphone by name, regardless of reboot-assigned index."""
 		for i in range(self._pa.get_device_count()):
 			d = self._pa.get_device_info_by_index(i)
-			if d['maxInputChannels'] > 0 and 'usb microphone' in d['name'].lower():
+			name = d['name'].lower()
+			if d['maxInputChannels'] > 0 and any(k in name for k in ['usb microphone', 'respeaker']):
 				print(f"WakeWord: found mic at index {i} — {d['name']}")
 				return i
 		raise RuntimeError("USB microphone not found — is it plugged in?")
@@ -88,11 +88,9 @@ class WakeWord:
 		try:
 			while not self._stop_event.is_set():
 				audio = stream.read(self.CHUNK, exception_on_overflow=False)
-				audio_np = np.frombuffer(audio, dtype=np.int16).astype(np.float32)
-				# Resample from 44100Hz to 16000Hz
-				resampled = scipy.signal.resample_poly(audio_np, self.TARGET_RATE, self.RATE)
-				resampled = resampled.astype(np.int16)
-				prediction = self._oww.predict(resampled)
+				audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
+				audio_np = audio_np[:, 0]
+				prediction = self._oww.predict(audio_np)
 				score = prediction.get("hey_ker_mit", 0)
 				if score > self.THRESHOLD:
 					print(f"'Hey Kermit' detected! (score: {score:.2f})")

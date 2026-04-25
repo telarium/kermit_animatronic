@@ -12,7 +12,7 @@ from pydispatch import dispatcher
 
 class SpeechToText:
 	WHISPER_SERVER_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/build/bin/whisper-server")
-	WHISPER_MODEL      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/models/ggml-tiny.en.bin")
+	WHISPER_MODEL      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/models/ggml-base.en.bin")
 	WHISPER_URL        = "http://127.0.0.1:8080/inference"
 
 	SAMPLE_RATE        = 16000
@@ -35,8 +35,7 @@ class SpeechToText:
 		"""Find the USB mic card number and return the plughw device string."""
 		result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
 		for line in result.stdout.splitlines():
-			if "usb" in line.lower():
-				# Line format: "card X: NAME [NAME], device Y: ..."
+			if any(k in line.lower() for k in ['usb', 'respeaker']):
 				parts = line.split(":")
 				card_num = parts[0].replace("card", "").strip()
 				print(f"SpeechToText: found mic at card {card_num}")
@@ -79,7 +78,7 @@ class SpeechToText:
 			"-D", self._alsa_device,
 			"-f", "S16_LE",
 			"-r", str(self.SAMPLE_RATE),
-			"-c", "1",
+			"-c", "2",  # stereo — ReSpeaker outputs beamformed audio on left channel
 			"--buffer-size=4096",
 			"-t", "raw",
 		]
@@ -93,9 +92,13 @@ class SpeechToText:
 
 		try:
 			while True:
-				data = proc.stdout.read(self.CHUNK_SIZE * 2)
-				if not data:
+				raw = proc.stdout.read(self.CHUNK_SIZE * 2 * 2)  # *2 for int16, *2 for stereo
+				if not raw:
 					break
+
+				# Extract left channel (beamformed output)
+				samples = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
+				data = samples[:, 0].tobytes()
 
 				energy = self._rms(data)
 

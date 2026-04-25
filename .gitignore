@@ -209,6 +209,8 @@ __marimo__/
 en_US-ryan-low.json
 en_US-ryan-low.onnx
 
+lib/respeaker/
+
 # Kermit - whisper binary exceptions
 !lib/
 !lib/whisper/
