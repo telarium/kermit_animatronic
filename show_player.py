@@ -61,7 +61,7 @@ class ShowPlayer:
 				if self.midi_states.get(midi_note) != state:
 					self.midi_states[midi_note] = state  # Update the state
 					# Send the event only for the specific note that changed
-					dispatcher.send(signal="showPlaybackMidiEvent", midi_note=midi_note, val=state)
+					dispatcher.send(signal="onMidiEvent", midi_note=midi_note, val=state)
 
 		# Remove processed events
 		self.midi_file_data = [entry for entry in self.midi_file_data if entry[0] > current_time_ms]
