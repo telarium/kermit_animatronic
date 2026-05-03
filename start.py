@@ -115,7 +115,6 @@ class Kermit:
 		signal.signal(signal.SIGTERM, self.shutdown)
 
 		self.wakeword.set_enabled(True)
-		self.movements.set_default_animation(True)
 		self.wifi_management.scan()
 
 		self.load_config()
@@ -139,7 +138,8 @@ class Kermit:
 		dispatcher.connect(self.on_show_stop, signal='showStop', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_end, signal='showEnd', sender=dispatcher.Any)
 		dispatcher.connect(self.on_mirrored_mode, signal='onMirroredMode', sender=dispatcher.Any)
-		dispatcher.connect(self.on_show_playback_midi_event, signal='showPlaybackMidiEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_midi_event, signal='onMidiEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_program_blue_event, signal='onProgramBlueEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		# WiFi signals from WifiManagement
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
@@ -228,8 +228,11 @@ class Kermit:
 		self.wakeword.set_enabled(True)
 		self.show_player.toggle_pause()
 
-	def on_show_playback_midi_event(self, midi_note: any, val: any) -> None:
+	def on_midi_event(self, midi_note: any, val: any) -> None:
 		self.movements.execute_midi_note(midi_note, val)
+
+	def on_program_blue_event(self, channel: any, val: any) -> None:
+		self.movements.execute_program_blue_channel(channel, val)
 
 	def on_connect_event(self, client_ip: str) -> None:
 		print(f"Web client connected from IP: {client_ip}")
