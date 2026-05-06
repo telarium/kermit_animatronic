@@ -66,8 +66,6 @@ class USBGamepadReader:
 		self.movements = movements
 		self.web_server = web_server
 
-		self.head_nod_inverted: bool = False
-
 		self.start_button_down: bool = False
 		self.select_button_down: bool = False
 
@@ -160,8 +158,6 @@ class USBGamepadReader:
 
 	def _dispatch_key_event(self, key: str, val: int) -> None:
 		# Tell the HTML front end that a gamepad event occurred so that it can play the corresponding MIDI note
-		if key == self.movements.head_nod.key and self.head_nod_inverted:
-			val = 1 - val
 		try:
 			if self.movements.execute_movement(str(key).lower(), val):
 				self.web_server.broadcast('gamepadKeyEvent', [str(key).lower(), val])
