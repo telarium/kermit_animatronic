@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 import warnings
 import subprocess
 
@@ -16,23 +17,32 @@ def _find_usb_audio_card() -> str:
 				return f"plughw:{card_num},0"
 	except Exception as e:
 		print(f"Audio: error finding USB audio card: {e}")
-	print("Audio: USB audio not found, falling back to plughw:0,0")
-	return "plughw:0,0"
+	print("Audio: USB audio not found.")
+	return None
 
 
 def _init_respeaker() -> None:
-	"""Clear ReSpeaker configuration to ensure a clean state at startup."""
+	"""USB reset ReSpeaker and clear configuration to ensure a clean state at startup."""
 	try:
-		script_dir = os.path.dirname(os.path.abspath(__file__))
-		xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
-		if not os.path.exists(xvf):
-			print("ReSpeaker: xvf_host not found, skipping init.")
-			return
-		jetson_dir = os.path.dirname(xvf)
-		env = os.environ.copy()
-		env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-		subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
-		print("ReSpeaker: configuration cleared.")
+		result = subprocess.run(["lsusb"], capture_output=True, text=True)
+		for line in result.stdout.splitlines():
+			if "respeaker" in line.lower():
+				vid_pid = line.split("ID ")[1].split()[0]
+				subprocess.run(["usbreset", vid_pid], check=True, capture_output=True)
+				print(f"ReSpeaker: USB reset complete ({vid_pid}).")
+				time.sleep(2)
+				script_dir = os.path.dirname(os.path.abspath(__file__))
+				xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
+				if not os.path.exists(xvf):
+					print("ReSpeaker: xvf_host not found, skipping init.")
+					return
+				jetson_dir = os.path.dirname(xvf)
+				env = os.environ.copy()
+				env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+				subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
+				print("ReSpeaker: configuration cleared.")
+				return
+		print("ReSpeaker: device not found in lsusb.")
 	except Exception as e:
 		print(f"ReSpeaker: init failed: {e}")
 
@@ -41,7 +51,6 @@ def _init_respeaker() -> None:
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'alsa'
-os.environ['AUDIODEV'] = _find_usb_audio_card()
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -53,24 +62,29 @@ _devnull = open(os.devnull, 'w')
 _old_stderr = os.dup(2)
 os.dup2(_devnull.fileno(), 2)
 
-# Init pygame mixer FIRST before anything else touches ALSA
+# Init pygame mixer — retry until USB audio device is available
 import pygame
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=8192)
-for attempt in range(10):
-	try:
-		pygame.mixer.init()
-		break
-	except Exception as e:
-		print(f"Audio: mixer init failed (attempt {attempt + 1}/10): {e}, retrying...")
-		time.sleep(1)
+for attempt in range(30):
+	audio_card = _find_usb_audio_card()
+	if audio_card:
+		os.environ['AUDIODEV'] = audio_card
+		try:
+			pygame.mixer.init()
+			break
+		except Exception as e:
+			print(f"Audio: mixer init failed (attempt {attempt + 1}/30): {e}, retrying...")
+	else:
+		print(f"Audio: USB device not found (attempt {attempt + 1}/30), retrying...")
+	time.sleep(2)
 else:
-	print("Audio: mixer init failed after 10 attempts, continuing without audio.")
+	print("Audio: USB audio device not found after 30 attempts. Exiting.")
+	sys.exit(1)
 
 _init_respeaker()
 
 # Now safe to import everything else
 import signal
-import time
 import threading
 import ctypes
 from pydispatch import dispatcher
@@ -149,7 +163,6 @@ class Kermit:
 		dispatcher.connect(self.on_midi_event, signal='onMidiEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_program_blue_event, signal='onProgramBlueEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
-		# WiFi signals from WifiManagement
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_password_required, signal='wifiPasswordRequired', sender=dispatcher.Any)
@@ -255,13 +268,15 @@ class Kermit:
 		self.wifi_management.scan()
 
 	def on_wakeword_event(self) -> None:
-		print("on_wakeword_event called")
 		def handle():
 			self.wakeword.set_enabled(False)
 			self.stt.listen_once()
 		threading.Thread(target=handle, daemon=True).start()
 
 	def on_transcription_result(self, text: str) -> None:
+		if not text:
+			self.wakeword.set_enabled(True)
+			return
 		print(f"Heard: {text}")
 		if not self.voiceCommandHandler.parse(text):
 			print("SEND LLM!")
@@ -275,8 +290,6 @@ class Kermit:
 		self.tts.speak(text)
 
 	def on_voice_play(self, file: str) -> None:
-		print("PLAY FILE")
-		print(file)
 		self.voice_player.play(file)
 
 	def on_voice_play_sequence(self, fileList) -> None:
@@ -284,11 +297,9 @@ class Kermit:
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
-			print("PLAYING!")
 			self.wakeword.set_enabled(False)
 		else:
 			self.wakeword.set_enabled(True)
-			print("DONE!")
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
@@ -311,7 +322,6 @@ class Kermit:
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
-		print("TODO TTS EVENT")
 
 	# -------------------------------------------------------------------------
 	# WiFi signal handlers
