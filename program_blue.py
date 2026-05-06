@@ -135,170 +135,183 @@ class ProgramBlue:
 		self._thread.join(timeout=2)
 		self._bus.close()
 		print("ProgramBlue: stopped.")
-		
+
 	def parse_file(self, file: str) -> tuple[str, list[list]]:
-		
+	    AUDIO_TMP = "/tmp/shw_audio.mp3"
 
-		AUDIO_TMP = '/tmp/shw_audio.mp3'
-		LANE_OFFSET = 238	# lane 239 = channel 1, lane 240 = channel 2, etc.
+	    def frame_to_ms(frame: int, fps: int | float) -> int:
+	        return round(frame * 1000.0 / fps)
 
-		def frame_to_ms(frame: int, fps: int | float) -> int:
-			return round(frame * 1000.0 / fps)
+	    def decode_v5_metadata(meta: bytes) -> bytes:
+	        xor_key = bytes.fromhex(
+	            "b5ad97cb9ec6a3d103fdeaa5c8ccb3a0"
+	            "d0cc8dcec198cec1b8bdbad9c0949ad8cb"
+	        )
+	        return bytes(b ^ xor_key[i % len(xor_key)] for i, b in enumerate(meta))
 
-		def decode_v5_metadata(meta: bytes) -> bytes:
-			xor_key = bytes.fromhex(
-				"b5ad97cb9ec6a3d103fdeaa5c8ccb3a0"
-				"d0cc8dcec198cec1b8bdbad9c0949ad8cb"
-			)
-			return bytes(b ^ xor_key[i % len(xor_key)] for i, b in enumerate(meta))
+	    def trim_v5_version(meta: bytes) -> bytes:
+	        m = re.search(rb"v\d+\.\d+>$", meta)
+	        return meta[:m.start()] if m else meta
 
-		def trim_v5_version(meta: bytes) -> bytes:
-			m = re.search(rb"v\d+\.\d+>$", meta)
-			return meta[:m.start()] if m else meta
+	    def parse_v5_frame_table(decoded: bytes, fps: int) -> list[list]:
+	        FRAME_BASE = 20
+	        FRAME_STRIDE = 258
+	        NUM_CHANNELS = 256
 
-		def parse_v5_frame_table(decoded: bytes, fps: int) -> list[list]:
-			FRAME_STRIDE = 258
-			NUM_LANES = 256
+	        table_end = decoded.find(b"<", 512)
+	        if table_end == -1:
+	            raise ValueError("Could not find v5 frame table terminator")
 
-			table_end_candidates = [
-				i for i in (
-					decoded.find(b"<", 512),
-					decoded.find(b"\r\n<", 512),
-					decoded.find(b"\n<", 512),
-				)
-				if i != -1
-			]
+	        frame_count = (table_end - FRAME_BASE) // FRAME_STRIDE
+	        if frame_count <= 0:
+	            raise ValueError("Could not detect v5 frame table")
 
-			if not table_end_candidates:
-				raise ValueError("Could not find v5 frame table terminator")
+	        # Trim trailing blank/footer rows.
+	        while frame_count > 0:
+	            row_start = FRAME_BASE + (frame_count - 1) * FRAME_STRIDE
+	            row = decoded[row_start : row_start + FRAME_STRIDE]
+	            channel_bytes = row[:255] + row[257:258]
+	            if any(channel_bytes):
+	                break
+	            frame_count -= 1
 
-			table_end = min(table_end_candidates)
+	        # Some v5 files have a trailing footer byte that looks like channel 1.
+	        if frame_count > 0:
+	            row_start = FRAME_BASE + (frame_count - 1) * FRAME_STRIDE
+	            row = decoded[row_start : row_start + FRAME_STRIDE]
+	            if len(row) == FRAME_STRIDE and row[257] and not any(row[:255]):
+	                frame_count -= 1
 
-			best_base = None
-			best_frames = 0
-			best_score = None
+	        def pos_to_channel(pos: int) -> int | None:
+	            if pos == 257:
+	                return 1
+	            if 0 <= pos <= 254:
+	                return pos + 2
+	            return None
 
-			for base in range(0, 512):
-				if base >= table_end:
-					break
-				frames = (table_end - base) // FRAME_STRIDE
-				remainder = (table_end - base) % FRAME_STRIDE
-				if frames <= 0:
-					continue
-				score = frames * 1000 - remainder * 100 - base
-				if best_score is None or score > best_score:
-					best_score = score
-					best_base = base
-					best_frames = frames
+	        events: list[list] = []
+	        prev = [0] * NUM_CHANNELS
 
-			if best_base is None or best_frames <= 0:
-				raise ValueError("Could not detect v5 frame layout")
+	        for frame in range(frame_count):
+	            row_start = FRAME_BASE + frame * FRAME_STRIDE
+	            row = decoded[row_start : row_start + FRAME_STRIDE]
 
-			raw_events: list[list] = []
-			prev = [0] * NUM_LANES
+	            if len(row) < FRAME_STRIDE:
+	                break
 
-			for frame in range(best_frames):
-				pos = best_base + frame * FRAME_STRIDE
-				if pos + NUM_LANES > len(decoded):
-					break
-				row = decoded[pos : pos + NUM_LANES]
-				current = [1 if b else 0 for b in row]
-				for lane, value in enumerate(current):
-					if value != prev[lane]:
-						raw_events.append([frame_to_ms(frame, fps), lane, value])
-				prev = current
+	            current = [0] * NUM_CHANNELS
 
-			print(
-				f"ProgramBlue: v5 layout "
-				f"frames={best_frames}, stride={FRAME_STRIDE}, "
-				f"base={best_base}, lanes={NUM_LANES}"
-			)
+	            for pos, b in enumerate(row):
+	                channel = pos_to_channel(pos)
+	                if channel is not None:
+	                    current[channel - 1] = 1 if b else 0
 
-			return [
-				[time_ms, lane - LANE_OFFSET, value]
-				for time_ms, lane, value in raw_events
-				if lane > LANE_OFFSET
-			]
+	            for channel_index, value in enumerate(current):
+	                if value != prev[channel_index]:
+	                    events.append([
+	                        frame_to_ms(frame, fps),
+	                        channel_index + 1,
+	                        value,
+	                    ])
 
-		def parse_v2_frame_table(decoded: bytes, fps: int, body_start: int, body_end: int) -> list[list]:
-			NUM_LANES = 256
-			frame_lines = decoded[body_start:body_end].splitlines()
+	            prev = current
 
-			raw_events: list[list] = []
-			prev = [0] * NUM_LANES
+	        print(
+	            f"ProgramBlue: v5 layout frames={frame_count}, "
+	            f"stride={FRAME_STRIDE}, base={FRAME_BASE}, channels={NUM_CHANNELS}"
+	        )
 
-			for frame, line in enumerate(frame_lines):
-				if len(line) != 256:
-					continue
-				row = bytes.fromhex(line.decode("ascii"))
-				current = [0] * NUM_LANES
-				for byte_index, value in enumerate(row):
-					current[byte_index * 2]     = 1 if value & 0x10 else 0
-					current[byte_index * 2 + 1] = 1 if value & 0x01 else 0
-				for lane, value in enumerate(current):
-					if value != prev[lane]:
-						raw_events.append([frame_to_ms(frame, fps), lane, value])
-				prev = current
+	        return events
 
-			print(f"ProgramBlue: v2 layout frames={len(frame_lines)}, lanes={NUM_LANES}")
+	    def parse_v2_frame_table(
+	        decoded: bytes,
+	        fps: int,
+	        body_start: int,
+	        body_end: int,
+	    ) -> list[list]:
+	        NUM_CHANNELS = 256
+	        frame_lines = decoded[body_start:body_end].splitlines()
 
-			return [
-				[time_ms, lane - LANE_OFFSET, value]
-				for time_ms, lane, value in raw_events
-				if lane > LANE_OFFSET
-			]
+	        events: list[list] = []
+	        prev = [0] * NUM_CHANNELS
 
-		try:
-			with open(file, 'rb') as f:
-				data = f.read()
+	        for frame, line in enumerate(frame_lines):
+	            if len(line) != 256:
+	                continue
 
-			# ── v5: <audio_size><dsfa><mp3><xor-encoded metadata><v5.xx> ──
-			m = re.match(rb"^(\d+)<dsfa>", data)
-			if m:
-				audio_size   = int(m.group(1))
-				audio_offset = m.end()
-				audio_end    = audio_offset + audio_size
+	            row = bytes.fromhex(line.decode("ascii"))
+	            current = [0] * NUM_CHANNELS
 
-				with open(AUDIO_TMP, 'wb') as f:
-					f.write(data[audio_offset:audio_end])
+	            for byte_index, value in enumerate(row):
+	                current[byte_index * 2] = 1 if value & 0x10 else 0
+	                current[byte_index * 2 + 1] = 1 if value & 0x01 else 0
 
-				meta         = trim_v5_version(data[audio_end:])
-				decoded_meta = decode_v5_metadata(meta)
-				fps          = int(getattr(self, 'fps', 40))
-				events       = parse_v5_frame_table(decoded_meta, fps)
+	            for channel_index, value in enumerate(current):
+	                if value != prev[channel_index]:
+	                    events.append([
+	                        frame_to_ms(frame, fps),
+	                        channel_index + 1,
+	                        value,
+	                    ])
 
-				print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({audio_size} bytes)")
-				print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
-				return AUDIO_TMP, events
+	            prev = current
 
-			# ── v2: every byte shifted by +54, contains <DSFROBOTSDATA> ──
-			decoded     = bytes((b - 54) & 0xFF for b in data)
-			data_marker = b"\r\n<DSFROBOTSDATA>\r\n"
-			data_start  = decoded.find(data_marker)
+	        print(
+	            f"ProgramBlue: v2 layout frames={len(frame_lines)}, "
+	            f"channels={NUM_CHANNELS}"
+	        )
 
-			if data_start == -1:
-				raise ValueError("Unknown .shw format")
+	        return events
 
-			with open(AUDIO_TMP, 'wb') as f:
-				f.write(decoded[:data_start])
+	    try:
+	        with open(file, "rb") as f:
+	            data = f.read()
 
-			body_start = data_start + len(data_marker)
-			body_end   = decoded.find(b"\r\n</DSFROBOTSDATA>", body_start)
+	        m = re.match(rb"^(\d+)<dsfa>", data)
+	        if m:
+	            audio_size = int(m.group(1))
+	            audio_offset = m.end()
+	            audio_end = audio_offset + audio_size
 
-			if body_end == -1:
-				raise ValueError("Missing </DSFROBOTSDATA> marker")
+	            with open(AUDIO_TMP, "wb") as f:
+	                f.write(data[audio_offset:audio_end])
 
-			fps_match = re.search(rb"\bFPS=(\d+)", decoded[body_end:])
-			fps       = int(fps_match.group(1)) if fps_match else int(getattr(self, 'fps', 40))
-			events    = parse_v2_frame_table(decoded, fps, body_start, body_end)
+	            meta = trim_v5_version(data[audio_end:])
+	            decoded_meta = decode_v5_metadata(meta)
+	            fps = int(getattr(self, "fps", 40))
+	            events = parse_v5_frame_table(decoded_meta, fps)
 
-			print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({data_start} bytes)")
-			print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
-			return AUDIO_TMP, events
+	            print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({audio_size} bytes)")
+	            print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
+	            return AUDIO_TMP, events
 
-		except Exception as e:
-			print(f"ProgramBlue: failed to parse '{file}': {e}")
-			return AUDIO_TMP, []
+	        decoded = bytes((b - 54) & 0xFF for b in data)
+	        data_marker = b"\r\n<DSFROBOTSDATA>\r\n"
+	        data_start = decoded.find(data_marker)
+
+	        if data_start == -1:
+	            raise ValueError("Unknown .shw format")
+
+	        with open(AUDIO_TMP, "wb") as f:
+	            f.write(decoded[:data_start])
+
+	        body_start = data_start + len(data_marker)
+	        body_end = decoded.find(b"\r\n</DSFROBOTSDATA>", body_start)
+
+	        if body_end == -1:
+	            raise ValueError("Missing </DSFROBOTSDATA> marker")
+
+	        fps_match = re.search(rb"\bFPS=(\d+)", decoded[body_end:])
+	        fps = int(fps_match.group(1)) if fps_match else int(getattr(self, "fps", 40))
+	        events = parse_v2_frame_table(decoded, fps, body_start, body_end)
+
+	        print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({data_start} bytes)")
+	        print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
+	        return AUDIO_TMP, events
+
+	    except Exception as e:
+	        print(f"ProgramBlue: failed to parse '{file}': {e}")
+	        return AUDIO_TMP, []
 
 	# ─── Reader Loop ─────────────────────────────────────────────────────────
 
