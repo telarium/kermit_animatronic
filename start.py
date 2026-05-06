@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 import warnings
 import subprocess
 
@@ -21,18 +22,27 @@ def _find_usb_audio_card() -> str:
 
 
 def _init_respeaker() -> None:
-	"""Clear ReSpeaker configuration to ensure a clean state at startup."""
+	"""Reset ReSpeaker USB and clear configuration to ensure a clean state at startup."""
 	try:
-		script_dir = os.path.dirname(os.path.abspath(__file__))
-		xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
-		if not os.path.exists(xvf):
-			print("ReSpeaker: xvf_host not found, skipping init.")
-			return
-		jetson_dir = os.path.dirname(xvf)
-		env = os.environ.copy()
-		env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-		subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
-		print("ReSpeaker: configuration cleared.")
+		result = subprocess.run(["lsusb"], capture_output=True, text=True)
+		for line in result.stdout.splitlines():
+			if "respeaker" in line.lower():
+				vid_pid = line.split("ID ")[1].split()[0]
+				subprocess.run(["usbreset", vid_pid], check=True, capture_output=True)
+				print(f"ReSpeaker: USB reset complete ({vid_pid}).")
+				time.sleep(2)
+				script_dir = os.path.dirname(os.path.abspath(__file__))
+				xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
+				if not os.path.exists(xvf):
+					print("ReSpeaker: xvf_host not found, skipping init.")
+					return
+				jetson_dir = os.path.dirname(xvf)
+				env = os.environ.copy()
+				env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+				subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
+				print("ReSpeaker: configuration cleared.")
+				return
+		print("ReSpeaker: device not found in lsusb.")
 	except Exception as e:
 		print(f"ReSpeaker: init failed: {e}")
 
@@ -48,8 +58,6 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
 warnings.filterwarnings("ignore")
 
-_init_respeaker()
-
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
 _devnull = open(os.devnull, 'w')
 _old_stderr = os.dup(2)
@@ -59,6 +67,8 @@ os.dup2(_devnull.fileno(), 2)
 import pygame
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=8192)
 pygame.mixer.init()
+
+_init_respeaker()
 
 # Now safe to import everything else
 import signal

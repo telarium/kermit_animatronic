@@ -60,14 +60,12 @@ class WakeWord:
 		print(f"WakeWord: threshold set to {self.threshold}")
 
 	def _find_device_index(self) -> int:
-		"""Find the microphone by name, regardless of reboot-assigned index."""
 		for i in range(self._pa.get_device_count()):
 			d = self._pa.get_device_info_by_index(i)
-			name = d['name'].lower()
-			if d['maxInputChannels'] > 0 and any(k in name for k in ['usb microphone', 'respeaker']):
-				print(f"WakeWord: found mic at index {i} — {d['name']}")
+			if d['maxInputChannels'] > 0 and 'respeaker' in d['name'].lower():
+				print(f"WakeWord: found ReSpeaker at index {i} — {d['name']}")
 				return i
-		raise RuntimeError("USB microphone not found — is it plugged in?")
+		raise RuntimeError("ReSpeaker not found — is it plugged in?")
 
 	def set_enabled(self, enabled: bool) -> None:
 		"""Start or stop listening for the wake word."""
@@ -112,6 +110,10 @@ class WakeWord:
 				audio_np = audio_np[:, 1]
 				prediction = self._oww.predict(audio_np)
 				score = prediction.get("hey_ker_mit", 0)
+				
+				if score > 0.05:
+					print(f"score: {score:.3f}")
+
 				if score > self.threshold:
 					print(f"'Hey Kermit' detected! (score: {score:.2f})")
 					dispatcher.send(signal="wakewordEvent")

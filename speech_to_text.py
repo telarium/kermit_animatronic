@@ -27,20 +27,19 @@ class SpeechToText:
 		self._listen_thread = None
 		self._listening = False
 		self._alsa_device = self._find_alsa_device()
+		print(f"SpeechToText: using device {self._alsa_device}")
 
 		self._start_whisper_server()
 		print("SpeechToText: initialized.")
 
 	def _find_alsa_device(self) -> str:
-		"""Find the USB mic card number and return the plughw device string."""
 		result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
 		for line in result.stdout.splitlines():
-			if any(k in line.lower() for k in ['usb', 'respeaker']):
-				parts = line.split(":")
-				card_num = parts[0].replace("card", "").strip()
-				print(f"SpeechToText: found mic at card {card_num}")
+			if 'respeaker' in line.lower():
+				card_num = line.split(":")[0].replace("card", "").strip()
+				print(f"SpeechToText: found ReSpeaker at card {card_num}")
 				return f"plughw:{card_num},0"
-		print("SpeechToText: USB mic not found, falling back to plughw:0,0")
+		print("SpeechToText: ReSpeaker not found!")
 		return "plughw:0,0"
 
 	def _start_whisper_server(self) -> None:
@@ -84,6 +83,7 @@ class SpeechToText:
 		]
 
 		proc = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+		print(f"SpeechToText: arecord started, pid={proc.pid}")
 
 		speech_frames  = []
 		silence_count  = 0
