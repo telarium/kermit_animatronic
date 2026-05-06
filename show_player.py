@@ -31,18 +31,20 @@ class ShowPlayer:
 			self.show_dir = None
 
 	def update(self) -> None:
-		last_checked_time = 0  # Keep track of the last update time
+		last_checked_time = 0
+		was_playing = False
 		while True:
 			try:
-				for event in self.pygame.event.get():
-					if event.type == self.MUSIC_END and self.active_show_name is not None:
-						dispatcher.send(signal="showEnd")
-						self.stop_show()
+				is_playing = self.pygame.mixer.music.get_busy()
 
-				if self.pygame.mixer.music.get_busy():  # Check if music is playing
-					current_time_ms = self.pygame.mixer.music.get_pos()  # Get playback time in milliseconds
+				if was_playing and not is_playing and self.active_show_name is not None:
+					dispatcher.send(signal="showEnd")
+					self.stop_show()
 
-					# Process MIDI data for the current time
+				was_playing = is_playing
+
+				if is_playing:
+					current_time_ms = self.pygame.mixer.music.get_pos()
 					if current_time_ms != last_checked_time:
 						self.process_midi_states(current_time_ms)
 						last_checked_time = current_time_ms
