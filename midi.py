@@ -17,6 +17,9 @@ class MIDI:
 		print("TODO MIDI RECEIVE")
 
 	def send_message(self, note: int, value: int) -> None:
+		if not hasattr(self, 'outport') or self.outport is None:
+			return
+
 		if value == 1:
 			# Note on message with full velocity
 			msg = mido.Message('note_on', note=note, velocity=127)
