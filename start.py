@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import sys
-import time
 import warnings
 import subprocess
 
@@ -22,27 +21,18 @@ def _find_usb_audio_card() -> str:
 
 
 def _init_respeaker() -> None:
-	"""Reset ReSpeaker USB and clear configuration to ensure a clean state at startup."""
+	"""Clear ReSpeaker configuration to ensure a clean state at startup."""
 	try:
-		result = subprocess.run(["lsusb"], capture_output=True, text=True)
-		for line in result.stdout.splitlines():
-			if "respeaker" in line.lower():
-				vid_pid = line.split("ID ")[1].split()[0]
-				subprocess.run(["usbreset", vid_pid], check=True, capture_output=True)
-				print(f"ReSpeaker: USB reset complete ({vid_pid}).")
-				time.sleep(2)
-				script_dir = os.path.dirname(os.path.abspath(__file__))
-				xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
-				if not os.path.exists(xvf):
-					print("ReSpeaker: xvf_host not found, skipping init.")
-					return
-				jetson_dir = os.path.dirname(xvf)
-				env = os.environ.copy()
-				env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-				subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
-				print("ReSpeaker: configuration cleared.")
-				return
-		print("ReSpeaker: device not found in lsusb.")
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
+		if not os.path.exists(xvf):
+			print("ReSpeaker: xvf_host not found, skipping init.")
+			return
+		jetson_dir = os.path.dirname(xvf)
+		env = os.environ.copy()
+		env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+		subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
+		print("ReSpeaker: configuration cleared.")
 	except Exception as e:
 		print(f"ReSpeaker: init failed: {e}")
 
@@ -66,7 +56,15 @@ os.dup2(_devnull.fileno(), 2)
 # Init pygame mixer FIRST before anything else touches ALSA
 import pygame
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=8192)
-pygame.mixer.init()
+for attempt in range(10):
+	try:
+		pygame.mixer.init()
+		break
+	except Exception as e:
+		print(f"Audio: mixer init failed (attempt {attempt + 1}/10): {e}, retrying...")
+		time.sleep(1)
+else:
+	print("Audio: mixer init failed after 10 attempts, continuing without audio.")
 
 _init_respeaker()
 
@@ -257,6 +255,7 @@ class Kermit:
 		self.wifi_management.scan()
 
 	def on_wakeword_event(self) -> None:
+		print("on_wakeword_event called")
 		def handle():
 			self.wakeword.set_enabled(False)
 			self.stt.listen_once()
