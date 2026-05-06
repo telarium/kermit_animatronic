@@ -106,9 +106,7 @@ class VoicePlayer:
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False)
 
 	def _play_file(self, file_path: str) -> None:
-		print(f"VoicePlayer: loading {file_path}")
 		sample_rate, data = self._load_audio_data(file_path)
-		print(f"VoicePlayer: loaded {len(data)/sample_rate:.2f}s at {sample_rate}Hz")
 		rms_values = self._calculate_rms(data, sample_rate)
 
 		buf = io.BytesIO()
@@ -117,16 +115,24 @@ class VoicePlayer:
 
 		self.pygame.mixer.music.load(buf)
 		self.pygame.mixer.music.play()
-		print(f"VoicePlayer: playback started")
 
 		start_time = time.monotonic()
-		...
+		for iteration, rms in enumerate(rms_values):
+			if self._stop_event.is_set():
+				break
 
-		# Wait for playback to finish (unless stopped)
-		print(f"VoicePlayer: RMS loop done, waiting for mixer...")
+			if rms > self.threshold:
+				dispatcher.send(signal="keyEvent", key='x', val=1)
+			else:
+				dispatcher.send(signal="keyEvent", key='x', val=0)
+
+			target_time = start_time + (iteration + 1) * (self.interval_ms / 1000.0)
+			sleep_duration = target_time - time.monotonic()
+			if sleep_duration > 0:
+				time.sleep(sleep_duration)
+
 		while self.pygame.mixer.music.get_busy() and not self._stop_event.is_set():
 			self.pygame.time.wait(10)
-		print(f"VoicePlayer: done")
 		
 	def _load_audio_data(self, file_path: str):
 		"""Load audio data and sample rate from mp3, ogg, or wav."""
