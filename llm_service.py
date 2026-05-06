@@ -62,7 +62,7 @@ class LLM:
 				)
 				response = result.content[0].text
 			except Exception as e:
-				this._on_fail();
+				self._on_fail();
 				print(f"LLM: Anthropic request failed: {e}")
 
 		# Fall back to OpenAI
@@ -79,7 +79,7 @@ class LLM:
 				)
 				response = result.choices[0].message.content
 			except Exception as e:
-				this._on_fail();
+				self._on_fail();
 				print(f"LLM: OpenAI request failed: {e}")
 
 		# Fall back to DeepSeek
@@ -99,11 +99,11 @@ class LLM:
 				)
 				response = result.choices[0].message.content
 			except Exception as e:
-				this._on_fail();
+				self._on_fail();
 				print(f"LLM: DeepSeek request failed: {e}")
 
 		if response is None:
-			this._on_fail();
+			self._on_fail();
 			print("LLM: all providers failed — no response available.")
 			return
 
