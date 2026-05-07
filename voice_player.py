@@ -23,6 +23,8 @@ class VoicePlayer:
 
 		self._stop_event = threading.Event()
 		self._thread: Optional[threading.Thread] = None
+		self._last_play_time: float = 0.0
+		self._dac_wake_threshold: float = 2.0  # seconds of idle before DAC needs waking
 
 		script_dir = os.path.dirname(os.path.abspath(__file__))
 		self._local_voices_dir = os.path.join(script_dir, "voices")
@@ -86,7 +88,22 @@ class VoicePlayer:
 		print(f"VoicePlayer: file not found: '{filename}' (checked as-is, USB, and local voices/)")
 		return None
 
+	def _wake_dac_if_needed(self) -> None:
+		"""Play a brief tone to wake the DAC if it has been idle too long."""
+		if time.monotonic() - self._last_play_time > self._dac_wake_threshold:
+			samples = int(44100 * 0.15)  # 150ms
+			t = np.linspace(0, 0.15, samples, endpoint=False)
+			tone = (np.sin(2 * np.pi * 80 * t) * 32767 * 0.04).astype(np.int16)
+			stereo = np.column_stack([tone, tone])
+			buf = io.BytesIO()
+			wavfile.write(buf, 44100, stereo)
+			buf.seek(0)
+			self.pygame.mixer.Sound(buf).play()
+			time.sleep(0.16)
+		self._last_play_time = time.monotonic()
+
 	def _play_sequence_worker(self, filenames: List[str]) -> None:
+		self._wake_dac_if_needed()
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True)
 		for filename in filenames:
 			if self._stop_event.is_set():
@@ -133,7 +150,9 @@ class VoicePlayer:
 
 		while self.pygame.mixer.music.get_busy() and not self._stop_event.is_set():
 			self.pygame.time.wait(10)
-		
+
+		self._last_play_time = time.monotonic()
+
 	def _load_audio_data(self, file_path: str):
 		"""Load audio data and sample rate from mp3, ogg, or wav."""
 		if file_path.endswith('.mp3'):
