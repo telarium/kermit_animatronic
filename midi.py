@@ -29,7 +29,7 @@ class MIDI:
 		self.outport.send(msg)
 		print(f"Sent MIDI message: {msg}")
 
-def parse_file(self, file: str) -> List[List]:
+def parse_file(file: str) -> List[List]:
 	"""Parse a MIDI file and return a list of [time_ms, midi_note, value] events.
 	value is 1 if velocity >= 90, 0 otherwise (note off or soft note on)."""
 	events: List[List] = []
