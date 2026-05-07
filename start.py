@@ -4,48 +4,8 @@ import sys
 import time
 import warnings
 import subprocess
-
-
-def _find_usb_audio_card() -> str:
-	"""Find the USB audio output card number from aplay -l and return plughw:X,0."""
-	try:
-		result = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
-		for line in result.stdout.splitlines():
-			if "usb audio" in line.lower() and "respeaker" not in line.lower():
-				card_num = line.split(":")[0].replace("card", "").strip()
-				print(f"Audio: found USB audio at card {card_num}")
-				return f"plughw:{card_num},0"
-	except Exception as e:
-		print(f"Audio: error finding USB audio card: {e}")
-	print("Audio: USB audio not found.")
-	return None
-
-
-def _init_respeaker() -> None:
-	"""USB reset ReSpeaker and clear configuration to ensure a clean state at startup."""
-	try:
-		result = subprocess.run(["lsusb"], capture_output=True, text=True)
-		for line in result.stdout.splitlines():
-			if "respeaker" in line.lower():
-				vid_pid = line.split("ID ")[1].split()[0]
-				subprocess.run(["usbreset", vid_pid], check=True, capture_output=True)
-				print(f"ReSpeaker: USB reset complete ({vid_pid}).")
-				time.sleep(2)
-				script_dir = os.path.dirname(os.path.abspath(__file__))
-				xvf = os.path.join(script_dir, "lib", "respeaker", "host_control", "jetson", "xvf_host")
-				if not os.path.exists(xvf):
-					print("ReSpeaker: xvf_host not found, skipping init.")
-					return
-				jetson_dir = os.path.dirname(xvf)
-				env = os.environ.copy()
-				env["LD_LIBRARY_PATH"] = jetson_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-				subprocess.run([xvf, "CLEAR_CONFIGURATION", "1"], check=True, capture_output=True, env=env)
-				print("ReSpeaker: configuration cleared.")
-				return
-		print("ReSpeaker: device not found in lsusb.")
-	except Exception as e:
-		print(f"ReSpeaker: init failed: {e}")
-
+import usb_monitor
+import pygame
 
 # Suppress noise — must be before any imports that touch audio
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
@@ -58,15 +18,14 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
 warnings.filterwarnings("ignore")
 
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
-_devnull = open(os.devnull, 'w')
-_old_stderr = os.dup(2)
-os.dup2(_devnull.fileno(), 2)
+#_devnull = open(os.devnull, 'w')
+#_old_stderr = os.dup(2)
+#os.dup2(_devnull.fileno(), 2)
 
 # Init pygame mixer — retry until USB audio device is available
-import pygame
-pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=8192)
+pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=16384)
 for attempt in range(30):
-	audio_card = _find_usb_audio_card()
+	audio_card = usb_monitor.find_usb_audio_card()
 	if audio_card:
 		os.environ['AUDIODEV'] = audio_card
 		try:
@@ -81,7 +40,7 @@ else:
 	print("Audio: USB audio device not found after 30 attempts. Exiting.")
 	sys.exit(1)
 
-_init_respeaker()
+usb_monitor.init_respeaker()
 
 # Now safe to import everything else
 import signal
@@ -89,7 +48,6 @@ import threading
 import ctypes
 from pydispatch import dispatcher
 from web_io import WebServer
-from gpio import GPIO
 from wakeword_detection import WakeWord
 from speech_to_text import SpeechToText
 from text_to_speech import TextToSpeech
@@ -97,15 +55,13 @@ from voice_commands import VoiceCommandHandler
 from llm_service import LLM
 from voice_player import VoicePlayer
 from animatronic_movements import Movement
-from gamepad_input import USBGamepadReader
-from usb_monitor import USBMonitor
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
 
 # Restore stderr now that all noisy imports are done
-os.dup2(_old_stderr, 2)
-os.close(_old_stderr)
-_devnull.close()
+#os.dup2(_old_stderr, 2)
+#os.close(_old_stderr)
+#_devnull.close()
 
 print("Startup complete.")
 
@@ -116,18 +72,16 @@ class Kermit:
 		self.wifi_access_points = None
 
 		# Initialize components
-		self.gpio = GPIO()
 		self.wakeword = WakeWord()
 		self.stt = SpeechToText()
 		self.tts = TextToSpeech()
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame)
-		self.movements = Movement(self.gpio)
+		self.movements = Movement()
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)
 
-		self.gamepad = USBGamepadReader(self.movements, self.web_server)
 		self.show_player = ShowPlayer(pygame)
 
 		self.set_dispatch_events()
@@ -140,7 +94,6 @@ class Kermit:
 		self.wifi_management.scan()
 
 		self.load_config()
-		self.usb_monitor = USBMonitor()
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
@@ -160,8 +113,6 @@ class Kermit:
 		dispatcher.connect(self.on_show_stop, signal='showStop', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_end, signal='showEnd', sender=dispatcher.Any)
 		dispatcher.connect(self.on_mirrored_mode, signal='onMirroredMode', sender=dispatcher.Any)
-		dispatcher.connect(self.on_midi_event, signal='onMidiEvent', sender=dispatcher.Any)
-		dispatcher.connect(self.on_program_blue_event, signal='onProgramBlueEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
@@ -171,7 +122,11 @@ class Kermit:
 
 	def load_config(self, path: str = "") -> None:
 		if not path:
-			path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.cfg")
+			usb_cfg = os.path.join(usb_monitor.USB_MOUNT_POINT, "config.cfg")
+			if os.path.exists(usb_cfg):
+				path = usb_cfg
+			else:
+				path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.cfg")
 
 		if os.path.exists(path):
 			self.config_path = path
@@ -249,17 +204,10 @@ class Kermit:
 		self.wakeword.set_enabled(True)
 		self.show_player.toggle_pause()
 
-	def on_midi_event(self, midi_note: any, val: any) -> None:
-		self.movements.execute_midi_note(midi_note, val)
-
-	def on_program_blue_event(self, channel: any, val: any) -> None:
-		self.movements.execute_program_blue_channel(channel, val)
-
 	def on_connect_event(self, client_ip: str) -> None:
 		print(f"Web client connected from IP: {client_ip}")
 		self.web_server.broadcast('voiceCommandUpdate', {"id": "idle", "value": ""})
 		self.show_player.get_show_list()
-		self.web_server.broadcast('movementInfo', self.movements.get_all_movement_info())
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
