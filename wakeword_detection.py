@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
+import subprocess
 import threading
+import time
 import numpy as np
 import pyaudio
 from pydispatch import dispatcher
@@ -9,25 +11,20 @@ from openwakeword.model import Model
 
 class WakeWord:
 	MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/openwakeword/hey_ker_mit.onnx")
+	XVF_PY     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
 
-	CHUNK = 1280        # 80ms at 16000Hz
-	FORMAT = pyaudio.paInt16
+	CHUNK    = 1280
+	FORMAT   = pyaudio.paInt16
 	CHANNELS = 2
-	RATE = 16000
-	TARGET_RATE = 16000
+	RATE     = 16000
 
 	def __init__(self, on_detected=None):
-		"""
-		on_detected: optional callback called when wake word is detected.
-					 Receives the score as a float argument.
-		"""
 		self.on_detected = on_detected
 		self._enabled = False
 		self._thread = None
 		self._stop_event = threading.Event()
 		self.threshold: float = 0.3
 
-		# Suppress ALSA noise during pyaudio and model init
 		_devnull = open(os.devnull, 'w')
 		_old_stderr = os.dup(2)
 		os.dup2(_devnull.fileno(), 2)
@@ -55,20 +52,10 @@ class WakeWord:
 		except configparser.Error as e:
 			print(f"WakeWord: failed to parse config at '{path}': {e}")
 			return
-
 		self.threshold = config.getfloat("Wakeword", "Threshold", fallback=0.3)
 		print(f"WakeWord: threshold set to {self.threshold}")
 
-	def _find_device_index(self) -> int:
-		for i in range(self._pa.get_device_count()):
-			d = self._pa.get_device_info_by_index(i)
-			if d['maxInputChannels'] > 0 and 'respeaker' in d['name'].lower():
-				print(f"WakeWord: found ReSpeaker at index {i} — {d['name']}")
-				return i
-		raise RuntimeError("ReSpeaker not found — is it plugged in?")
-
 	def set_enabled(self, enabled: bool) -> None:
-		"""Start or stop listening for the wake word."""
 		if enabled and not self._enabled:
 			self._enabled = True
 			self._stop_event.clear()
@@ -84,10 +71,31 @@ class WakeWord:
 				self._thread = None
 			print("WakeWord: listening stopped.")
 
-	def _listen_loop(self) -> None:
-		device_index = self._find_device_index()
+	# -------------------------------------------------------------------------
+	# Internal
+	# -------------------------------------------------------------------------
 
-		# Suppress ALSA noise when opening the stream
+	def _find_device_index(self) -> int:
+		for attempt in range(20):
+			self._pa.terminate()
+			_devnull = open(os.devnull, 'w')
+			_old_stderr = os.dup(2)
+			os.dup2(_devnull.fileno(), 2)
+			self._pa = pyaudio.PyAudio()
+			os.dup2(_old_stderr, 2)
+			os.close(_old_stderr)
+			_devnull.close()
+
+			for i in range(self._pa.get_device_count()):
+				d = self._pa.get_device_info_by_index(i)
+				if d['maxInputChannels'] > 0 and 'respeaker' in d['name'].lower():
+					print(f"WakeWord: found ReSpeaker at index {i} — {d['name']}")
+					return i
+			print(f"WakeWord: ReSpeaker not found, retrying ({attempt + 1}/20)...")
+			time.sleep(1)
+		raise RuntimeError("ReSpeaker not found — is it plugged in?")
+
+	def _open_stream(self, device_index: int) -> pyaudio.Stream:
 		_devnull = open(os.devnull, 'w')
 		_old_stderr = os.dup(2)
 		os.dup2(_devnull.fileno(), 2)
@@ -102,27 +110,42 @@ class WakeWord:
 		os.dup2(_old_stderr, 2)
 		os.close(_old_stderr)
 		_devnull.close()
+		return stream
 
-		try:
-			while not self._stop_event.is_set():
-				audio = stream.read(self.CHUNK, exception_on_overflow=False)
-				audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
-				audio_np = audio_np[:, 1]
-				prediction = self._oww.predict(audio_np)
-				score = prediction.get("hey_ker_mit", 0)
-				
-				if score > 0.05:
-					print(f"score: {score:.3f}")
+	def _listen_loop(self) -> None:
+		while not self._stop_event.is_set():
+			try:
+				device_index = self._find_device_index()
+				stream = self._open_stream(device_index)
 
-				if score > self.threshold:
-					print(f"'Hey Kermit' detected! (score: {score:.2f})")
-					dispatcher.send(signal="wakewordEvent")
-					self._oww.reset()
-					if self.on_detected:
-						self.on_detected(score)
-		finally:
-			stream.stop_stream()
-			stream.close()
+				try:
+					while not self._stop_event.is_set():
+						audio = stream.read(self.CHUNK, exception_on_overflow=False)
+						audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
+						audio_mono = audio_np[:, 0]
+
+						prediction = self._oww.predict(audio_mono)
+						score = prediction.get("hey_ker_mit", 0)
+
+						#if score > 0.05:
+						#	print(f"score: {score:.3f}")
+
+						if score > self.threshold:
+							print(f"'Hey Kermit' detected! (score: {score:.2f})")
+							dispatcher.send(signal="wakewordEvent")
+							self._oww.reset()
+							if self.on_detected:
+								self.on_detected(score)
+				finally:
+					try:
+						stream.stop_stream()
+						stream.close()
+					except Exception:
+						pass
+
+			except Exception as e:
+				print(f"WakeWord: error in listen loop: {e}")
+				time.sleep(2)
 
 	def __del__(self):
 		self.set_enabled(False)
@@ -130,8 +153,6 @@ class WakeWord:
 
 
 if __name__ == "__main__":
-	import time
-
 	def on_detected(score):
 		print(f">> Hey Kermit heard! score={score:.2f}")
 
