@@ -1,58 +1,61 @@
 import threading
 import time
-from evdev import InputDevice, categorize, ecodes, list_devices, InputEvent
+from evdev import InputDevice, ecodes, list_devices, InputEvent
 from enum import Enum
 from dataclasses import dataclass
+from pydispatch import dispatcher
 from typing import Optional, Dict, Any, List
 
 class Button(Enum):
 	# Bumpers
-	LEFT_BUMPER = 'q'               # head tilt left
-	RIGHT_BUMPER = 'e'              # head tilt right
+	LEFT_BUMPER  = 0
+	RIGHT_BUMPER = 1
 
 	# Left Stick
-	LEFT_STICK_LEFT = 'a'           # head turn left
-	LEFT_STICK_RIGHT = 'd'          # head turn right
-	LEFT_STICK_UP = 'w'             # head tilt up
+	LEFT_STICK_LEFT  = 2
+	LEFT_STICK_RIGHT = 3
+	LEFT_STICK_UP    = 4
+	LEFT_STICK_DOWN  = 5
 
 	# Right Stick
-	RIGHT_STICK_LEFT = 'z'          # body turn left
-	RIGHT_STICK_RIGHT = 'c'         # body turn right
-	RIGHT_STICK_DOWN = 's'          # both lean up
+	RIGHT_STICK_LEFT  = 6
+	RIGHT_STICK_RIGHT = 7
+	RIGHT_STICK_UP    = 8
+	RIGHT_STICK_DOWN  = 9
 
 	# Triggers
-	LEFT_TRIGGER = 'x'              # mouth
-	RIGHT_TRIGGER = 'x'             # mouth
+	LEFT_TRIGGER  = 10
+	RIGHT_TRIGGER = 11
 
 	# Face Buttons
-	BTN_A = 'z'
-	BTN_B = 'c'
-	BTN_NORTH = 's'
-	BTN_WEST = 'x'
+	BTN_SOUTH = 12
+	BTN_EAST  = 13
+	BTN_NORTH = 14
+	BTN_WEST  = 15
 
 	# Hat (analog stick button)
-	BTN_THUMBL = 'x'
-	BTN_THUMBR = 'x'
+	BTN_THUMBL = 16
+	BTN_THUMBR = 17
 
 	# D-pad
-	DPAD_LEFT = 'a'
-	DPAD_RIGHT = 'd'
-	DPAD_DOWN = 'w'
-	DPAD_UP = 'x'
+	DPAD_LEFT  = 18
+	DPAD_RIGHT = 19
+	DPAD_DOWN  = 20
+	DPAD_UP    = 21
 
-	# Start and Select Buttons. Holding down both toggles mirrored mode
-	START = 'start'
-	SELECT = 'select'
+	# Start and Select
+	START  = 22
+	SELECT = 23
 
 class Direction(Enum):
-	NEUTRAL = 'neutral'
-	UP = 'up'
-	DOWN = 'down'
-	LEFT = 'left'
-	RIGHT = 'right'
-	UP_LEFT = 'up-left'
-	UP_RIGHT = 'up-right'
-	DOWN_LEFT = 'down-left'
+	NEUTRAL    = 'neutral'
+	UP         = 'up'
+	DOWN       = 'down'
+	LEFT       = 'left'
+	RIGHT      = 'right'
+	UP_LEFT    = 'up-left'
+	UP_RIGHT   = 'up-right'
+	DOWN_LEFT  = 'down-left'
 	DOWN_RIGHT = 'down-right'
 
 @dataclass
@@ -62,47 +65,33 @@ class StickState:
 	y: int = 0
 
 class USBGamepadReader:
-	def __init__(self, movements: Any, web_server: Any) -> None:
-		self.movements = movements
-		self.web_server = web_server
+	TRIGGER_THRESHOLD = 128  # Half of 255
 
+	KEY_BUTTON_MAP: Dict[int, Button] = {
+		ecodes.BTN_TL: Button.LEFT_BUMPER,
+		ecodes.BTN_TR: Button.RIGHT_BUMPER,
+		304:           Button.BTN_SOUTH,
+		305:           Button.BTN_EAST,
+		307:           Button.BTN_WEST,
+		308:           Button.BTN_NORTH,
+		317:           Button.BTN_THUMBL,
+		318:           Button.BTN_THUMBR,
+		314:           Button.SELECT,
+		315:           Button.START,
+	}
+
+	def __init__(self) -> None:
 		self.start_button_down: bool = False
 		self.select_button_down: bool = False
-
-		# Mapping of event codes to Button Enum using ecodes constants
-		self.key_button_map: Dict[int, Button] = {
-			# Bumpers
-			ecodes.BTN_TL: Button.LEFT_BUMPER,
-			ecodes.BTN_TR: Button.RIGHT_BUMPER,
-
-			# Triggers
-			ecodes.BTN_TL2: Button.LEFT_TRIGGER,
-			ecodes.BTN_TR2: Button.RIGHT_TRIGGER,
-
-			# Additional Buttons
-			ecodes.BTN_A: Button.BTN_A,
-			ecodes.BTN_B: Button.BTN_B,
-			ecodes.BTN_WEST: Button.BTN_WEST,
-			ecodes.BTN_NORTH: Button.BTN_NORTH,
-			ecodes.BTN_THUMBL: Button.BTN_THUMBL,
-			ecodes.BTN_THUMBR: Button.BTN_THUMBR,
-
-			# Start and Select Buttons (using arbitrary codes 314 and 315)
-			314: Button.SELECT,
-			315: Button.START,
-		}
+		self._trigger_states: Dict[Button, bool] = {}
 
 		self.device: Optional[InputDevice] = self._find_gamepad()
 		if self.device:
 			print(f"Gamepad detected: {self.device.name} ({self.device.path})")
-			# Initialize stick positions and directions to center
 			self.left_stick: StickState = StickState()
 			self.right_stick: StickState = StickState()
-			# Initialize D-pad states
 			self.dpad_states: Dict[str, bool] = {'left': False, 'right': False, 'up': False, 'down': False}
-			# Retrieve axis ranges
 			self.abs_ranges: Dict[int, Dict[str, int]] = self._get_abs_ranges()
-			# Start the input reading thread using standard threading
 			self.update_thread: threading.Thread = threading.Thread(target=self.read_inputs, daemon=True)
 			self.update_thread.start()
 		else:
@@ -116,9 +105,12 @@ class USBGamepadReader:
 			if any(keyword in device.name.lower() for keyword in ['gamepad', 'joystick', 'controller']):
 				return device
 			capabilities = device.capabilities()
-			if (ecodes.ABS_X in capabilities.get(ecodes.EV_ABS, []) and
-				(ecodes.BTN_GAMEPAD in capabilities.get(ecodes.EV_KEY, []) or
-				 ecodes.BTN_JOYSTICK in capabilities.get(ecodes.EV_KEY, []))):
+			keys = capabilities.get(ecodes.EV_KEY, [])
+			axes = capabilities.get(ecodes.EV_ABS, [])
+			if ecodes.ABS_X in axes and (
+				ecodes.BTN_GAMEPAD in keys or
+				ecodes.BTN_JOYSTICK in keys
+			):
 				return device
 		return None
 
@@ -133,7 +125,6 @@ class USBGamepadReader:
 
 	def read_inputs(self) -> None:
 		while True:
-			# If the device isn't set, try to find it again.
 			if not self.device:
 				print("No gamepad device available. Trying to reconnect...")
 				self.device = self._find_gamepad()
@@ -153,46 +144,50 @@ class USBGamepadReader:
 						self._process_abs_event(event)
 			except OSError as e:
 				print(f"Device error: {e}. Attempting to reconnect...")
-				self.device = None  # Invalidate the current device so we try to find it again
-				time.sleep(1)  # Brief pause before attempting reconnection
+				self.device = None
+				time.sleep(1)
 
-	def _dispatch_key_event(self, key: str, val: int) -> None:
-		# Tell the HTML front end that a gamepad event occurred so that it can play the corresponding MIDI note
-		try:
-			if self.movements.execute_movement(str(key).lower(), val):
-				self.web_server.broadcast('gamepadKeyEvent', [str(key).lower(), val])
-		except Exception as e:
-			print(f"Invalid key: {e}")
+	def _dispatch(self, button: Button, val: int) -> None:
+		print(f"Gamepad: button={button.name} val={val}")
+		dispatcher.send(signal="gamepadEvent", button=button, val=val)
 
 	def _process_button_event(self, event: InputEvent) -> None:
 		keycode = event.code
+		if keycode in self.KEY_BUTTON_MAP:
+			button = self.KEY_BUTTON_MAP[keycode]
+			self._dispatch(button, event.value)
 
-		if keycode in self.key_button_map:
-			button = self.key_button_map[keycode]
-			self._dispatch_key_event(button.value, event.value)
-
-			# Update Start and Select button states
 			if button == Button.START:
 				self.start_button_down = bool(event.value)
 			elif button == Button.SELECT:
 				self.select_button_down = bool(event.value)
 
-			# Check if both Start and Select are pressed, which toggles mirrored mode.
 			if self.start_button_down and self.select_button_down:
-				from pydispatch import dispatcher  # Import here to avoid circular dependency if any
 				dispatcher.send(signal="mirrorModeToggle")
+		else:
+			print(f"Gamepad: unmapped button code={keycode} val={event.value}")
 
 	def _process_abs_event(self, event: InputEvent) -> None:
 		code = event.code
 		value = event.value
 
-		# D-pad handling
 		if code == ecodes.ABS_HAT0X:
 			self._handle_dpad('left', 'right', value)
 		elif code == ecodes.ABS_HAT0Y:
 			self._handle_dpad('up', 'down', value)
+		elif code == ecodes.ABS_Z:
+			self._handle_trigger(Button.LEFT_TRIGGER, value)
+		elif code == ecodes.ABS_RZ:
+			self._handle_trigger(Button.RIGHT_TRIGGER, value)
 		else:
 			self._handle_stick(event)
+
+	def _handle_trigger(self, button: Button, value: int) -> None:
+		pressed = value > self.TRIGGER_THRESHOLD
+		current = self._trigger_states.get(button, False)
+		if pressed != current:
+			self._trigger_states[button] = pressed
+			self._dispatch(button, int(pressed))
 
 	def _handle_dpad(self, negative_dir: str, positive_dir: str, value: int) -> None:
 		if value == -1:
@@ -209,14 +204,14 @@ class USBGamepadReader:
 		button = getattr(Button, f"DPAD_{direction.upper()}", None)
 		if button and self.dpad_states[direction] != pressed:
 			self.dpad_states[direction] = pressed
-			self._dispatch_key_event(button.value, int(pressed))
+			self._dispatch(button, int(pressed))
 
 	def _handle_stick(self, event: InputEvent) -> None:
 		axis_map = {
-			ecodes.ABS_X: ('left', 'x'),
-			ecodes.ABS_Y: ('left', 'y'),
-			ecodes.ABS_Z: ('right', 'x'),
-			ecodes.ABS_RZ: ('right', 'y')
+			ecodes.ABS_X:  ('left', 'x'),
+			ecodes.ABS_Y:  ('left', 'y'),
+			ecodes.ABS_RX: ('right', 'x'),
+			ecodes.ABS_RY: ('right', 'y')
 		}
 		if event.code in axis_map:
 			stick, axis = axis_map[event.code]
@@ -227,18 +222,15 @@ class USBGamepadReader:
 				self._update_stick_direction(stick_state, direction, stick)
 
 	def _update_stick_direction(self, stick_state: StickState, new_direction: Direction, stick: str) -> None:
-		# Release previous direction keys
 		self._change_stick_keys(stick_state.direction, stick, pressed=False)
-		# Update direction
 		stick_state.direction = new_direction
-		# Press new direction keys
 		self._change_stick_keys(new_direction, stick, pressed=True)
 
 	def _change_stick_keys(self, direction: Direction, stick: str, pressed: bool) -> None:
 		if direction != Direction.NEUTRAL:
 			keys: List[Button] = self._direction_to_keys(direction, stick)
 			for key in keys:
-				self._dispatch_key_event(key.value, int(pressed))
+				self._dispatch(key, int(pressed))
 
 	def _direction_to_keys(self, direction: Direction, stick: str) -> List[Button]:
 		directions = direction.value.split('-')
@@ -251,18 +243,15 @@ class USBGamepadReader:
 		return keys
 
 	def _get_direction(self, stick: str, x: int, y: int) -> Direction:
-		axis_x = ecodes.ABS_X if stick == 'left' else ecodes.ABS_Z
-		axis_y = ecodes.ABS_Y if stick == 'left' else ecodes.ABS_RZ
+		axis_x = ecodes.ABS_X if stick == 'left' else ecodes.ABS_RX
+		axis_y = ecodes.ABS_Y if stick == 'left' else ecodes.ABS_RY
 
-		# Get axis ranges
 		min_x, max_x = self.abs_ranges[axis_x]['min'], self.abs_ranges[axis_x]['max']
 		min_y, max_y = self.abs_ranges[axis_y]['min'], self.abs_ranges[axis_y]['max']
 
-		# Normalize values to -1 to 1
 		norm_x = (2 * (x - min_x) / (max_x - min_x)) - 1
 		norm_y = (2 * (y - min_y) / (max_y - min_y)) - 1
 
-		# Apply dead zone
 		DEAD_ZONE = 0.2
 		norm_x = norm_x if abs(norm_x) > DEAD_ZONE else 0
 		norm_y = norm_y if abs(norm_y) > DEAD_ZONE else 0
