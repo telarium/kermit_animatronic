@@ -3,9 +3,12 @@ import mido
 import time
 import pygame
 import random
-from pydispatch import dispatcher
 import threading
 from typing import List, Optional
+from pydispatch import dispatcher
+from midi import MIDI
+from program_blue import ProgramBlue
+
 
 class ShowPlayer:
 	def __init__(self, pygame_instance) -> None:
