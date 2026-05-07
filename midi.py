@@ -29,23 +29,23 @@ class MIDI:
 		self.outport.send(msg)
 		print(f"Sent MIDI message: {msg}")
 
-	def parse_file(self, file: str) -> List[List]:
-		"""Parse a MIDI file and return a list of [time_ms, midi_note, value] events.
-		value is 1 if velocity >= 90, 0 otherwise (note off or soft note on)."""
-		events: List[List] = []
-		try:
-			midi_file = mido.MidiFile(file)
-			current_time_ms: float = 0.0
-			for message in midi_file:
-				current_time_ms += message.time * 1000  # delta time → absolute ms
-				if message.type == 'note_on':
-					value = 1 if message.velocity >= 90 else 0
-					events.append([current_time_ms, message.note, value])
-				elif message.type == 'note_off':
-					events.append([current_time_ms, message.note, 0])
-		except Exception as e:
-			print(f"MIDI: failed to parse '{file}': {e}")
-		return events
+def parse_file(self, file: str) -> List[List]:
+	"""Parse a MIDI file and return a list of [time_ms, midi_note, value] events.
+	value is 1 if velocity >= 90, 0 otherwise (note off or soft note on)."""
+	events: List[List] = []
+	try:
+		midi_file = mido.MidiFile(file)
+		current_time_ms: float = 0.0
+		for message in midi_file:
+			current_time_ms += message.time * 1000  # delta time → absolute ms
+			if message.type == 'note_on':
+				value = 1 if message.velocity >= 90 else 0
+				events.append([current_time_ms, message.note, value])
+			elif message.type == 'note_off':
+				events.append([current_time_ms, message.note, 0])
+	except Exception as e:
+		print(f"MIDI: failed to parse '{file}': {e}")
+	return events
 
 
 # Example usage:
