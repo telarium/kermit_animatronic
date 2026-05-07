@@ -18,9 +18,9 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
 warnings.filterwarnings("ignore")
 
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
-#_devnull = open(os.devnull, 'w')
-#_old_stderr = os.dup(2)
-#os.dup2(_devnull.fileno(), 2)
+_devnull = open(os.devnull, 'w')
+_old_stderr = os.dup(2)
+os.dup2(_devnull.fileno(), 2)
 
 # Init pygame mixer — retry until USB audio device is available
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=16384)
@@ -59,9 +59,9 @@ from show_player import ShowPlayer
 from wifi_management import WifiManagement
 
 # Restore stderr now that all noisy imports are done
-#os.dup2(_old_stderr, 2)
-#os.close(_old_stderr)
-#_devnull.close()
+os.dup2(_old_stderr, 2)
+os.close(_old_stderr)
+_devnull.close()
 
 print("Startup complete.")
 
@@ -189,16 +189,13 @@ class Kermit:
 	def on_show_play(self, show_name: str) -> None:
 		self.wakeword.set_enabled(False)
 		self.show_player.load_show(show_name)
-		self.movements.set_default_animation(False)
 
 	def on_show_stop(self) -> None:
 		self.wakeword.set_enabled(True)
 		self.show_player.stop_show()
-		self.movements.set_default_animation(True)
 
 	def on_show_end(self) -> None:
 		self.wakeword.set_enabled(True)
-		self.movements.set_default_animation(True)
 
 	def on_show_pause(self) -> None:
 		self.wakeword.set_enabled(True)
