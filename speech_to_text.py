@@ -7,6 +7,7 @@ import wave
 import time
 import numpy as np
 import requests
+import webrtcvad
 from pydispatch import dispatcher
 
 
@@ -16,17 +17,25 @@ class SpeechToText:
 	WHISPER_URL        = "http://127.0.0.1:8080/inference"
 
 	SAMPLE_RATE        = 16000
-	CHUNK_SIZE         = 1024
-	SILENCE_THRESHOLD  = 300
-	SILENCE_CHUNKS     = 15
-	MIN_SPEECH_CHUNKS  = 4
-	PREROLL_CHUNKS     = 8
+	VAD_FRAME_MS       = 30                                       # webrtcvad supports 10, 20, or 30ms
+	VAD_FRAME_SAMPLES  = int(SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 samples
+	VAD_FRAME_BYTES    = VAD_FRAME_SAMPLES * 2                    # 960 bytes (int16)
+	VAD_AGGRESSIVENESS = 3                                        # 0–3; 3 = most aggressive noise filtering
+	SILENCE_THRESHOLD  = 150                                      # RMS threshold to detect speech start
+	PREROLL_FRAMES     = 8                                        # frames before speech start to include (~240ms)
+
+	# End-of-speech: consecutive VAD-silent frames before stopping.
+	SILENCE_FRAMES_END = 50
+
+	# Minimum speech frames before bothering to transcribe.
+	MIN_SPEECH_FRAMES  = 4                                        # ~120ms
 
 	def __init__(self) -> None:
-		self._server_proc = None
+		self._server_proc   = None
 		self._listen_thread = None
-		self._listening = False
-		self._alsa_device = self._find_alsa_device()
+		self._listening     = False
+		self._vad           = webrtcvad.Vad(self.VAD_AGGRESSIVENESS)
+		self._alsa_device   = self._find_alsa_device()
 		print(f"SpeechToText: using device {self._alsa_device}")
 
 		self._start_whisper_server()
@@ -55,7 +64,6 @@ class SpeechToText:
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
 		)
-		# Give the server a moment to initialize
 		time.sleep(2)
 		print("SpeechToText: whisper-server ready.")
 
@@ -77,7 +85,7 @@ class SpeechToText:
 			"-D", self._alsa_device,
 			"-f", "S16_LE",
 			"-r", str(self.SAMPLE_RATE),
-			"-c", "2",  # stereo — ReSpeaker outputs beamformed audio on left channel
+			"-c", "2",            # stereo — ReSpeaker outputs beamformed audio on left channel
 			"--buffer-size=4096",
 			"-t", "raw",
 		]
@@ -89,10 +97,13 @@ class SpeechToText:
 		silence_count  = 0
 		in_speech      = False
 		preroll_buffer = []
+		leftover       = b""
+		done           = False
 
 		try:
 			while True:
-				raw = proc.stdout.read(self.CHUNK_SIZE * 2 * 2)  # *2 for int16, *2 for stereo
+				# Read one stereo VAD frame worth of data
+				raw = proc.stdout.read(self.VAD_FRAME_BYTES * 2)  # *2 for stereo
 				if not raw:
 					break
 
@@ -100,31 +111,55 @@ class SpeechToText:
 				samples = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
 				data = samples[:, 0].tobytes()
 
-				energy = self._rms(data)
+				# Prepend leftover bytes from last iteration
+				data     = leftover + data
+				leftover = b""
 
-				if energy > self.SILENCE_THRESHOLD:
+				# Process complete VAD frames
+				while len(data) >= self.VAD_FRAME_BYTES:
+					frame = data[:self.VAD_FRAME_BYTES]
+					data  = data[self.VAD_FRAME_BYTES:]
+
+					energy = self._rms(frame)
+
 					if not in_speech:
-						in_speech = True
-						silence_count = 0
-						speech_frames = list(preroll_buffer)
-					speech_frames.append(data)
-					preroll_buffer = []
-				else:
-					preroll_buffer.append(data)
-					if len(preroll_buffer) > self.PREROLL_CHUNKS:
-						preroll_buffer.pop(0)
+						# Use RMS to detect speech start — simple and reliable
+						if energy > self.SILENCE_THRESHOLD:
+							in_speech     = True
+							silence_count = 0
+							speech_frames = list(preroll_buffer)
+							print("SpeechToText: speech started.")
+						else:
+							preroll_buffer.append(frame)
+							if len(preroll_buffer) > self.PREROLL_FRAMES:
+								preroll_buffer.pop(0)
+					else:
+						# Use webrtcvad to detect end-of-speech — smarter than RMS for this
+						speech_frames.append(frame)
+						try:
+							vad_says_speech = self._vad.is_speech(frame, self.SAMPLE_RATE)
+						except Exception:
+							vad_says_speech = energy > self.SILENCE_THRESHOLD
 
-					if in_speech:
-						silence_count += 1
-						speech_frames.append(data)
-						if silence_count >= self.SILENCE_CHUNKS:
-							# Done capturing — transcribe
-							if len(speech_frames) >= self.MIN_SPEECH_CHUNKS:
+						if vad_says_speech:
+							silence_count = 0
+						else:
+							silence_count += 1
+
+						if silence_count >= self.SILENCE_FRAMES_END:
+							print(f"SpeechToText: speech ended ({len(speech_frames)} frames).")
+							if len(speech_frames) >= self.MIN_SPEECH_FRAMES:
 								text = self._transcribe(speech_frames)
 								if text:
 									print(f"SpeechToText: transcribed: {text}")
 									dispatcher.send(signal="transcriptionResult", text=text)
+							done = True
 							break
+
+				if done:
+					break
+
+				leftover = data
 
 		finally:
 			proc.terminate()
@@ -135,11 +170,11 @@ class SpeechToText:
 		return np.sqrt(np.mean(samples**2))
 
 	def _transcribe(self, frames: list) -> str:
-		audio = np.frombuffer(b''.join(frames), dtype=np.int16)
+		audio = np.frombuffer(b"".join(frames), dtype=np.int16)
 
-		with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+		with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
 			tmp_path = f.name
-		wf = wave.open(tmp_path, 'wb')
+		wf = wave.open(tmp_path, "wb")
 		wf.setnchannels(1)
 		wf.setsampwidth(2)
 		wf.setframerate(self.SAMPLE_RATE)
@@ -147,20 +182,20 @@ class SpeechToText:
 		wf.close()
 
 		try:
-			with open(tmp_path, 'rb') as f:
+			with open(tmp_path, "rb") as f:
 				response = requests.post(
 					self.WHISPER_URL,
-					files={'file': ('audio.wav', f, 'audio/wav')},
-					data={'temperature': '0', 'response_format': 'json'}
+					files={"file": ("audio.wav", f, "audio/wav")},
+					data={"temperature": "0", "response_format": "json"},
 				)
 			if response.ok:
-				return response.json().get('text', '').strip()
+				return response.json().get("text", "").strip()
 		except Exception as e:
 			print(f"SpeechToText: transcription error: {e}")
 		finally:
 			os.unlink(tmp_path)
 
-		return ''
+		return ""
 
 	def shutdown(self) -> None:
 		"""Stop listening and kill the whisper-server process."""
