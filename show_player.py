@@ -135,8 +135,10 @@ class ShowPlayer:
 			# Try ProgramBlue first.
 			shw_path = os.path.join(directory, show_name + '.shw')
 			if os.path.isfile(shw_path):
-				print(f"ShowPlayer: loading ProgramBlue show: {shw_path}")
 				audio_path, events = parse_shw_file(shw_path)
+				print(f"ShowPlayer: event table ({len(events)} events):")
+				for e in events:
+					print(f"  {e[0]:6}ms  ch={e[1]:3d}  val={e[2]}")
 				return audio_path, events, ShowType.PROGRAM_BLUE
 
 			# Try audio + MIDI pair.
