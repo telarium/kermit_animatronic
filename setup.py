@@ -12,7 +12,7 @@ class Setup:
 			"python3-smbus", "python3-evdev", "python3-setuptools", "python3-mido",
 			"python3-flask", "python3-pip",
 			"python3-psutil", "python3-pydispatch", "python3-pygame", "iw",
-			"iproute2", "pyusb", "libusb-package",
+			"iproute2", "pyusb", "libusb-package", "webrtcvad",
 			# ALSA audio
 			"alsa-utils", "portaudio19-dev", "ffmpeg",
 		]
