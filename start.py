@@ -23,7 +23,8 @@ _old_stderr = os.dup(2)
 os.dup2(_devnull.fileno(), 2)
 
 # Init pygame mixer — retry until USB audio device is available
-pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=16384)
+pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
+
 for attempt in range(30):
 	audio_card = usb_monitor.find_usb_audio_card()
 	if audio_card:
@@ -94,6 +95,8 @@ class Kermit:
 		self.wifi_management.scan()
 
 		self.load_config()
+
+		#self.show_player.load_show("test4")
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
