@@ -10,7 +10,7 @@ from openwakeword.model import Model
 
 
 class WakeWord:
-	MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/openwakeword/hey_ker_mit.onnx")
+	MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/openwakeword/okay_ker_mit.onnx")
 	XVF_PY     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
 
 	CHUNK    = 1280
@@ -61,7 +61,7 @@ class WakeWord:
 			self._stop_event.clear()
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
-			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Hey Kermit'...")
+			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Okay Kermit'...")
 			print("WakeWord: listening started.")
 		elif not enabled and self._enabled:
 			self._enabled = False
@@ -125,13 +125,13 @@ class WakeWord:
 						audio_mono = audio_np[:, 0]
 
 						prediction = self._oww.predict(audio_mono)
-						score = prediction.get("hey_ker_mit", 0)
+						score = prediction.get("okay_ker_mit", 0)
 
 						#if score > 0.05:
 						#	print(f"score: {score:.3f}")
 
 						if score > self.threshold:
-							print(f"'Hey Kermit' detected! (score: {score:.2f})")
+							print(f"'Okay Kermit' detected! (score: {score:.2f})")
 							dispatcher.send(signal="wakewordEvent")
 							self._oww.reset()
 							if self.on_detected:
@@ -154,7 +154,7 @@ class WakeWord:
 
 if __name__ == "__main__":
 	def on_detected(score):
-		print(f">> Hey Kermit heard! score={score:.2f}")
+		print(f">> Okay Kermit heard! score={score:.2f}")
 
 	ww = WakeWord(on_detected=on_detected)
 	ww.set_enabled(True)
