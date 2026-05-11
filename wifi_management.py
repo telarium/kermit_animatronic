@@ -355,49 +355,65 @@ class WifiManagement:
 		return None
 
 	def _startup_connect(self, ssid: str, password: Optional[str]) -> None:
-		"""Try preferred SSID; fall back to known NM profiles on failure."""
+		"""Connect on startup using a strict priority order:
+		1. Exact match of config SSID in visible networks.
+		2. Any known NM profile visible in the current scan.
+		3. Fuzzy match of config SSID against visible networks.
+		"""
 		current = self.get_current_ssid()
-		target = self._fuzzy_match_ssid(ssid)
-		if target and current and current.lower() == target.lower():
+		if current:
 			print(f"WifiManagement: already connected to '{current}', skipping.")
 			dispatcher.send(signal="wifiConnected", ssid=current)
 			return
-		if target:
-			known = self._get_known_ssids()
+
+		visible = self._get_visible_ssids()
+		visible_lower = {s.lower(): s for s in visible}
+		known = self._get_known_ssids()
+
+		# 1. Exact match of config SSID in visible networks (case-insensitive)
+		if ssid.lower() in visible_lower:
+			target = visible_lower[ssid.lower()]
+			print(f"WifiManagement: found exact match '{target}', connecting...")
 			if target in known:
 				success, _ = self._nmcli_up_by_ssid(target)
 			elif password:
 				success, _ = self._nmcli_connect_new(target, password)
 			else:
 				success = False
-
 			if success:
 				print(f"WifiManagement: connected to preferred network '{target}'.")
 				dispatcher.send(signal="wifiConnected", ssid=target)
 				return
+			print(f"WifiManagement: exact match '{target}' failed, trying fallbacks...")
 
-		print("WifiManagement: preferred network failed, trying known networks...")
-		self._fallback_connect()
+		# 2. Known NM profiles that are currently visible
+		for known_ssid in known:
+			if known_ssid.lower() in visible_lower:
+				target = visible_lower[known_ssid.lower()]
+				print(f"WifiManagement: trying known network '{target}'...")
+				success, _ = self._nmcli_up_by_ssid(target)
+				if success:
+					print(f"WifiManagement: connected to known network '{target}'.")
+					dispatcher.send(signal="wifiConnected", ssid=target)
+					return
+				time.sleep(1)
 
-	def _fallback_connect(self) -> None:
-		"""Iterate NM's saved wireless profiles and try to connect to each."""
-		current = self.get_current_ssid()
-		if current:
-			print(f"WifiManagement: already connected to '{current}', skipping fallback.")
-			dispatcher.send(signal="wifiConnected", ssid=current)
-			return
-
-		known = self._get_known_ssids()
-		for ssid in known:
-			print(f"WifiManagement: trying saved network '{ssid}'...")
-			success, _ = self._nmcli_up_by_ssid(ssid)
+		# 3. Fuzzy match of config SSID against visible networks
+		print(f"WifiManagement: no known networks visible, trying fuzzy match for '{ssid}'...")
+		target = self._fuzzy_match_ssid(ssid)
+		if target:
+			if target in known:
+				success, _ = self._nmcli_up_by_ssid(target)
+			elif password:
+				success, _ = self._nmcli_connect_new(target, password)
+			else:
+				success = False
 			if success:
-				print(f"WifiManagement: connected via fallback to '{ssid}'.")
-				dispatcher.send(signal="wifiConnected", ssid=ssid)
+				print(f"WifiManagement: connected via fuzzy match to '{target}'.")
+				dispatcher.send(signal="wifiConnected", ssid=target)
 				return
-			time.sleep(1)
-		print("WifiManagement: all fallback networks failed.")
 
+		print("WifiManagement: all connection attempts failed.")
 
 # Example usage
 if __name__ == "__main__":
