@@ -82,6 +82,7 @@ def _watch() -> None:
 
 		if device.action == 'add':
 			print(f"USBMonitor: drive connected ({device_name})")
+			dispatcher.send(signal="playVoiceFile", file="usb_connected.ogg")
 			threading.Timer(2.0, _check_mounted).start()
 
 		elif device.action == 'remove':

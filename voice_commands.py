@@ -34,7 +34,7 @@ class VoiceCommandHandler:
 			"what's your wifi network", "what is your wifi network",
 			"what wifi are you connected to", "what network are you on",
 			"which wifi are you on", "are you connected to wifi",
-			"what's your network", "tell me your wifi", "which network",
+			"what's your network", "tell me your wifi", "which network", "wifi network"
 		],
 		"who_are_you": [
 			"who are you", "what's your name", "tell me about you", "tell me about yourself",
@@ -180,7 +180,8 @@ class VoiceCommandHandler:
 		# TODO: pass song_name to show resolver class
 
 	def _handle_connect_wifi(self, ssid: str) -> None:
-		print(f"VoiceCommandHandler: connecting to wifi network '{ssid}'")
+		print(f"VoiceCommandHandler: connect to wifi requested for '{ssid}'")
+		dispatcher.send(signal="playVoiceFile", file="connect_to_wifi.ogg")
 		self._wifi_management.connect(ssid)
 
 	def _handle_get_ip(self) -> None:
@@ -229,4 +230,4 @@ class VoiceCommandHandler:
 
 	def _handle_greeting(self) -> None:
 		print("VoiceCommandHandler: greeting")
-		# TODO: dispatcher.send(signal='ttsSpeak', text="Well hello there!")
+		dispatcher.send(signal="playVoiceFile", file="who_are_you.ogg")

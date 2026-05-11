@@ -222,7 +222,6 @@ class WifiManagement:
 			# New network with a password — connect and let NM save it
 			success, error = self._nmcli_connect_new(target_ssid, password)
 		else:
-			# TODO: password required to connect to this new network
 			print(f"WifiManagement: password required for new network '{target_ssid}'")
 			dispatcher.send(signal="wifiPasswordRequired", ssid=target_ssid)
 			return
@@ -231,11 +230,12 @@ class WifiManagement:
 			print(f"WifiManagement: connected to '{target_ssid}'.")
 			dispatcher.send(signal="wifiConnected", ssid=target_ssid)
 		else:
-			if error and ("secrets" in error.lower() or "password" in error.lower() or "802-11" in error.lower()):
+			if error and ("secrets" in error.lower() or "password" in error.lower() or "802-11" in error.lower() or "authentication" in error.lower()):
 				print(f"WifiManagement: wrong password for '{target_ssid}'.")
-				dispatcher.send(signal="wifiWrongPassword", ssid=target_ssid)
+				dispatcher.send(signal="playVoiceFile", file="wifi_bad_password.ogg")
 			else:
 				print(f"WifiManagement: connection failed for '{target_ssid}': {error}")
+				dispatcher.send(signal="playVoiceFile", file="wifi_connection_failed.ogg")
 
 	def _nmcli_up_by_ssid(self, ssid: str):
 		"""Bring up a known NM connection profile by SSID."""
@@ -244,9 +244,19 @@ class WifiManagement:
 				["nmcli", "dev", "wifi", "connect", ssid],
 				capture_output=True, text=True, timeout=30
 			)
-			success = result.returncode == 0
-			error = result.stderr.strip() if not success else None
-			return success, error
+			output = (result.stdout + result.stderr).lower()
+			if result.returncode != 0 or "error" in output or "secrets" in output:
+				return False, (result.stdout + result.stderr).strip()
+
+			# nmcli returns 0 before auth completes — verify we're actually connected
+			time.sleep(3)
+			current = self.get_current_ssid()
+			if current and current.lower() == ssid.lower():
+				return True, None
+
+			# Not connected — delete the bad saved profile
+			subprocess.run(["nmcli", "con", "delete", ssid], capture_output=True)
+			return False, "authentication failed"
 		except Exception as e:
 			return False, str(e)
 
@@ -257,9 +267,19 @@ class WifiManagement:
 				["nmcli", "dev", "wifi", "connect", ssid, "password", password],
 				capture_output=True, text=True, timeout=30
 			)
-			success = result.returncode == 0
-			error = result.stderr.strip() if not success else None
-			return success, error
+			output = (result.stdout + result.stderr).lower()
+			if result.returncode != 0 or "error" in output or "secrets" in output:
+				return False, (result.stdout + result.stderr).strip()
+
+			# nmcli returns 0 before auth completes — verify we're actually connected
+			time.sleep(3)
+			current = self.get_current_ssid()
+			if current and current.lower() == ssid.lower():
+				return True, None
+
+			# Not connected — delete the bad profile NM just saved
+			subprocess.run(["nmcli", "con", "delete", ssid], capture_output=True)
+			return False, "authentication failed"
 		except Exception as e:
 			return False, str(e)
 
@@ -413,7 +433,9 @@ class WifiManagement:
 				dispatcher.send(signal="wifiConnected", ssid=target)
 				return
 
+		dispatcher.send(signal="playVoiceFile", file="wifi_not_found.ogg")
 		print("WifiManagement: all connection attempts failed.")
+
 
 # Example usage
 if __name__ == "__main__":
