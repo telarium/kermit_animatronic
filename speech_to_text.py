@@ -8,6 +8,7 @@ import time
 import numpy as np
 import requests
 import webrtcvad
+from collections import deque
 from pydispatch import dispatcher
 
 
@@ -21,14 +22,24 @@ class SpeechToText:
 	VAD_FRAME_SAMPLES  = int(SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 samples
 	VAD_FRAME_BYTES    = VAD_FRAME_SAMPLES * 2                    # 960 bytes (int16)
 	VAD_AGGRESSIVENESS = 3                                        # 0–3; 3 = most aggressive noise filtering
-	SILENCE_THRESHOLD  = 150                                      # RMS threshold to detect speech start
+
+	# Adaptive noise floor settings
+	NOISE_FLOOR_MIN    = 50                                       # never go below this (avoids hypersensitivity in silence)
+	NOISE_FLOOR_WINDOW = 67                                       # frames to average for noise floor (~2 seconds at 30ms/frame)
+	SPEECH_RATIO       = 3.0                                      # speech threshold = floor * this ratio
+
 	PREROLL_FRAMES     = 8                                        # frames before speech start to include (~240ms)
 
 	# End-of-speech: consecutive VAD-silent frames before stopping.
-	SILENCE_FRAMES_END = 50
+	# At 30ms/frame: 25 frames ≈ 750ms of silence.
+	SILENCE_FRAMES_END = 25
 
 	# Minimum speech frames before bothering to transcribe.
 	MIN_SPEECH_FRAMES  = 4                                        # ~120ms
+
+	# Safety net: maximum speech duration before forcing end.
+	# At 30ms/frame: 333 frames ≈ 10 seconds.
+	MAX_SPEECH_FRAMES  = 333
 
 	def __init__(self) -> None:
 		self._server_proc   = None
@@ -53,6 +64,9 @@ class SpeechToText:
 
 	def _start_whisper_server(self) -> None:
 		"""Launch whisper-server as a background subprocess."""
+		# Kill any existing whisper-server processes first
+		subprocess.run(["pkill", "-f", "whisper-server"], capture_output=True)
+		time.sleep(1)
 		print("SpeechToText: starting whisper-server...")
 		self._server_proc = subprocess.Popen(
 			[
@@ -100,6 +114,10 @@ class SpeechToText:
 		leftover       = b""
 		done           = False
 
+		# Adaptive noise floor — rolling window of recent RMS values while not in speech
+		noise_window   = deque(maxlen=self.NOISE_FLOOR_WINDOW)
+		noise_floor    = self.NOISE_FLOOR_MIN
+
 		try:
 			while True:
 				# Read one stereo VAD frame worth of data
@@ -123,12 +141,18 @@ class SpeechToText:
 					energy = self._rms(frame)
 
 					if not in_speech:
-						# Use RMS to detect speech start — simple and reliable
-						if energy > self.SILENCE_THRESHOLD:
+						# Update adaptive noise floor
+						noise_window.append(energy)
+						if len(noise_window) >= 10:  # need at least 10 frames before trusting the floor
+							noise_floor = max(self.NOISE_FLOOR_MIN, float(np.mean(noise_window)))
+
+						threshold = noise_floor * self.SPEECH_RATIO
+
+						if energy > threshold:
 							in_speech     = True
 							silence_count = 0
 							speech_frames = list(preroll_buffer)
-							print("SpeechToText: speech started.")
+							print(f"SpeechToText: speech started (energy={energy:.0f} threshold={threshold:.0f} floor={noise_floor:.0f}).")
 						else:
 							preroll_buffer.append(frame)
 							if len(preroll_buffer) > self.PREROLL_FRAMES:
@@ -139,15 +163,18 @@ class SpeechToText:
 						try:
 							vad_says_speech = self._vad.is_speech(frame, self.SAMPLE_RATE)
 						except Exception:
-							vad_says_speech = energy > self.SILENCE_THRESHOLD
+							vad_says_speech = energy > noise_floor * self.SPEECH_RATIO
 
 						if vad_says_speech:
 							silence_count = 0
 						else:
 							silence_count += 1
 
-						if silence_count >= self.SILENCE_FRAMES_END:
-							print(f"SpeechToText: speech ended ({len(speech_frames)} frames).")
+						if silence_count >= self.SILENCE_FRAMES_END or len(speech_frames) >= self.MAX_SPEECH_FRAMES:
+							if len(speech_frames) >= self.MAX_SPEECH_FRAMES:
+								print(f"SpeechToText: max duration reached, forcing end.")
+							else:
+								print(f"SpeechToText: speech ended ({len(speech_frames)} frames, floor={noise_floor:.0f}).")
 							if len(speech_frames) >= self.MIN_SPEECH_FRAMES:
 								text = self._transcribe(speech_frames)
 								if text:
