@@ -10,6 +10,20 @@ from pydispatch import dispatcher
 class LLM:
 	HISTORY_LIMIT = 20  # number of exchanges (user + assistant pairs) to remember
 
+	CONTEXT_POSTFIX = (
+		" Only use spoken words in your responses and not actions."
+		" If you are asking the user a direct question that requires their response,"
+		" end your message with exactly ???? and nothing after it."
+		" Only use ???? when you genuinely need their answer to continue — not for rhetorical questions."
+		" The user's answers are transcribed by speech recognition and may contain errors, mishearings,"
+		" or unusual spellings. Always assume the user meant the correct answer if there is any reasonable"
+		" interpretation that matches."
+		" Names may be phonetically transcribed. Partial answers that capture the key fact should be accepted."
+		" When in doubt, accept the answer and move on enthusiastically."
+		" If the user's message is [SILENCE], respond as if they didn't answer —"
+		" gently prompt them again or move on naturally."
+	)
+
 	def __init__(self) -> None:
 		self.llm_context: str = ""
 		self.anthropic_key: str = ""
@@ -54,7 +68,7 @@ class LLM:
 	# Internal
 	# -------------------------------------------------------------------------
 
-	def _on_fail(self):
+	def _on_fail(self) -> None:
 		dispatcher.send(signal="playVoiceFile", file="no_ai.ogg")
 
 	def _build_messages(self, query: str) -> list:
@@ -65,10 +79,10 @@ class LLM:
 
 	def _send(self, query: str) -> None:
 		response = None
+		messages = self._build_messages(query)
+		system_prompt = self.llm_context + self.CONTEXT_POSTFIX
 
 		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=str)
-
-		messages = self._build_messages(query)
 
 		# Try Anthropic (Claude) first
 		if self.anthropic_key:
@@ -77,7 +91,7 @@ class LLM:
 				result = client.messages.create(
 					model=self.anthropic_model,
 					max_tokens=1024,
-					system=self.llm_context,
+					system=system_prompt,
 					messages=messages,
 				)
 				response = result.content[0].text
@@ -87,14 +101,10 @@ class LLM:
 		# Fall back to OpenAI
 		if response is None and self.openai_key:
 			try:
-				full_messages = []
-				if self.llm_context:
-					full_messages.append({"role": "system", "content": self.llm_context})
-				full_messages.extend(messages)
 				client = OpenAI(api_key=self.openai_key)
 				result = client.chat.completions.create(
 					model="gpt-4o-mini",
-					messages=full_messages,
+					messages=[{"role": "system", "content": system_prompt}, *messages],
 				)
 				response = result.choices[0].message.content
 			except Exception as e:
@@ -103,25 +113,21 @@ class LLM:
 		# Fall back to DeepSeek
 		if response is None and self.deepseek_api_key:
 			try:
-				full_messages = []
-				if self.llm_context:
-					full_messages.append({"role": "system", "content": self.llm_context})
-				full_messages.extend(messages)
 				client = OpenAI(
 					api_key=self.deepseek_api_key,
 					base_url="https://api.deepseek.com",
 				)
 				result = client.chat.completions.create(
 					model=self.deepseek_model,
-					messages=full_messages,
+					messages=[{"role": "system", "content": system_prompt}, *messages],
 				)
 				response = result.choices[0].message.content
 			except Exception as e:
 				print(f"LLM: DeepSeek request failed: {e}")
 
 		if response is None:
-			self._on_fail()
 			print("LLM: all providers failed — no response available.")
+			self._on_fail()
 			return
 
 		# Store the exchange in history
