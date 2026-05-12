@@ -41,6 +41,10 @@ class SpeechToText:
 	# At 30ms/frame: 333 frames ≈ 10 seconds.
 	MAX_SPEECH_FRAMES  = 333
 
+	# Maximum frames to wait for speech to begin before giving up.
+	# At 30ms/frame: 333 frames ≈ 10 seconds.
+	MAX_PRESPEECH_FRAMES = 333
+
 	def __init__(self) -> None:
 		self._server_proc   = None
 		self._listen_thread = None
@@ -82,11 +86,15 @@ class SpeechToText:
 		print("SpeechToText: whisper-server ready.")
 
 	def listen_once(self) -> None:
-		"""Begin capturing audio in a background thread.
-		Dispatches 'transcriptionResult' with the text when done."""
 		if self._listening:
-			print("SpeechToText: already listening, ignoring request.")
-			return
+			if self._listen_thread and not self._listen_thread.is_alive():
+				print("SpeechToText: thread dead but _listening stuck True, resetting.")
+				self._listening = False
+			else:
+				print("SpeechToText: already listening, ignoring request.")
+				return
+			
+		print(f"SpeechToText: listen_once called, _listening={self._listening}")
 		self._listen_thread = threading.Thread(target=self._capture_and_transcribe, daemon=True)
 		self._listen_thread.start()
 
@@ -107,12 +115,13 @@ class SpeechToText:
 		proc = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 		print(f"SpeechToText: arecord started, pid={proc.pid}")
 
-		speech_frames  = []
-		silence_count  = 0
-		in_speech      = False
-		preroll_buffer = []
-		leftover       = b""
-		done           = False
+		speech_frames    = []
+		silence_count    = 0
+		in_speech        = False
+		preroll_buffer   = []
+		leftover         = b""
+		done             = False
+		prespeech_frames = 0
 
 		# Adaptive noise floor — rolling window of recent RMS values while not in speech
 		noise_window   = deque(maxlen=self.NOISE_FLOOR_WINDOW)
@@ -141,6 +150,13 @@ class SpeechToText:
 					energy = self._rms(frame)
 
 					if not in_speech:
+						prespeech_frames += 1
+						if prespeech_frames >= self.MAX_PRESPEECH_FRAMES:
+							print(f"SpeechToText: no speech detected within timeout, giving up.")
+							dispatcher.send(signal="transcriptionResult", text="[SILENCE]")
+							done = True
+							break
+
 						# Update adaptive noise floor
 						noise_window.append(energy)
 						if len(noise_window) >= 10:  # need at least 10 frames before trusting the floor
@@ -179,7 +195,10 @@ class SpeechToText:
 								text = self._transcribe(speech_frames)
 								if text:
 									print(f"SpeechToText: transcribed: {text}")
-									dispatcher.send(signal="transcriptionResult", text=text)
+							else:
+								text = ""
+							# Always dispatch so caller can clean up, even if transcription was empty
+							dispatcher.send(signal="transcriptionResult", text=text)
 							done = True
 							break
 
@@ -216,7 +235,11 @@ class SpeechToText:
 					data={"temperature": "0", "response_format": "json"},
 				)
 			if response.ok:
-				return response.json().get("text", "").strip()
+				text = response.json().get("text", "").strip()
+				# Whisper sometimes returns this literal string for silence
+				if text.upper() == "[BLANK_AUDIO]":
+					return ""
+				return text
 		except Exception as e:
 			print(f"SpeechToText: transcription error: {e}")
 		finally:

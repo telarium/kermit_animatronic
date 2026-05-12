@@ -67,7 +67,8 @@ class VoicePlayer:
 	def _stop_current(self) -> None:
 		"""Signal any active playback to stop and wait for it to finish."""
 		self._stop_event.set()
-		self.pygame.mixer.music.stop()
+		if self.pygame.mixer.get_init():
+			self.pygame.mixer.music.stop()
 		if self._thread and self._thread.is_alive():
 			self._thread.join(timeout=2)
 		self._thread = None
@@ -103,6 +104,7 @@ class VoicePlayer:
 		self._last_play_time = time.monotonic()
 
 	def _play_sequence_worker(self, filenames: List[str]) -> None:
+		print(f"VoicePlayer: worker started, {len(filenames)} file(s)")
 		self._wake_dac_if_needed()
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True)
 		for filename in filenames:
@@ -118,11 +120,15 @@ class VoicePlayer:
 			except Exception as e:
 				print(f"VoicePlayer: error playing '{filename}': {e}")
 
-		# Ensure mouth is closed when done
 		dispatcher.send(signal="keyEvent", key='x', val=0)
+		print(f"VoicePlayer: worker done, dispatching bPlaying=False")
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False)
 
 	def _play_file(self, file_path: str) -> None:
+		if not self.pygame.mixer.get_init():
+			print(f"VoicePlayer: mixer not initialized, skipping '{file_path}'")
+			return
+
 		sample_rate, data = self._load_audio_data(file_path)
 		rms_values = self._calculate_rms(data, sample_rate)
 
@@ -148,8 +154,14 @@ class VoicePlayer:
 			if sleep_duration > 0:
 				time.sleep(sleep_duration)
 
+		# Wait for playback to finish with a safety timeout
+		deadline = time.monotonic() + 30
 		while self.pygame.mixer.music.get_busy() and not self._stop_event.is_set():
-			self.pygame.time.wait(10)
+			if time.monotonic() > deadline:
+				print("VoicePlayer: playback timeout, forcing stop.")
+				self.pygame.mixer.music.stop()
+				break
+			time.sleep(0.01)
 
 		self._last_play_time = time.monotonic()
 

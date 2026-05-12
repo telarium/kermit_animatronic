@@ -71,6 +71,7 @@ class Kermit:
 	def __init__(self) -> None:
 		self.is_running: bool = True
 		self.wifi_access_points = None
+		self._awaiting_followup: bool = False
 
 		# Initialize components
 		self.wakeword = WakeWord()
@@ -223,10 +224,13 @@ class Kermit:
 
 	def on_transcription_result(self, text: str) -> None:
 		if not text:
+			if self._awaiting_followup:
+				self._awaiting_followup = False
 			self.wakeword.set_enabled(True)
 			return
 		print(f"Heard: {text}")
-		if not self.voiceCommandHandler.parse(text):
+		if self._awaiting_followup or not self.voiceCommandHandler.parse(text):
+			self._awaiting_followup = False
 			print("SEND LLM!")
 			self.llm.send(text)
 			self.wakeword.set_enabled(False)
@@ -234,6 +238,11 @@ class Kermit:
 			self.wakeword.set_enabled(True)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
+		if text.endswith("????"):
+			self._awaiting_followup = True
+			text = text[:-4].strip()
+		else:
+			self._awaiting_followup = False
 		print(f"Response: {text}")
 		self.tts.speak(text)
 
@@ -247,7 +256,15 @@ class Kermit:
 		if bPlaying:
 			self.wakeword.set_enabled(False)
 		else:
-			self.wakeword.set_enabled(True)
+			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
+			if self._awaiting_followup:
+				def delayed_listen():
+					time.sleep(0.5)
+					print("Kermit: awaiting follow-up response, listening...")
+					self.stt.listen_once()
+				threading.Thread(target=delayed_listen, daemon=True).start()
+			else:
+				self.wakeword.set_enabled(True)
 
 	def on_key_event(self, key: any, val: any) -> None:
 		try:
