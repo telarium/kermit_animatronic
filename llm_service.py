@@ -13,8 +13,8 @@ class LLM:
 	CONTEXT_POSTFIX = (
 		" Only use spoken words in your responses and not actions."
 		" If you are asking the user a direct question that requires their response,"
-		" end your message with exactly ???? and nothing after it."
-		" Only use ???? when you genuinely need their answer to continue — not for rhetorical questions."
+		" end your message with the appropriate punctuation and then exactly [?]."
+		" Only use [?] when you genuinely need their answer to continue, but not for rhetorical questions."
 		" The user's answers are transcribed by speech recognition and may contain errors, mishearings,"
 		" or unusual spellings. Always assume the user meant the correct answer if there is any reasonable"
 		" interpretation that matches."

@@ -83,26 +83,19 @@ class Kermit:
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)
-
 		self.show_player = ShowPlayer(pygame)
 
 		self.set_dispatch_events()
+		self.wakeword.set_enabled(True)
+		self.wifi_management.scan()
+		self.load_config()
 
 		# Handle SIGINT and SIGTERM for graceful shutdown
 		signal.signal(signal.SIGINT, self.shutdown)
 		signal.signal(signal.SIGTERM, self.shutdown)
 
-		self.wakeword.set_enabled(True)
-		self.wifi_management.scan()
-
-		self.load_config()
-
-		#self.show_player.load_show("test4")
-
 	def set_dispatch_events(self) -> None:
-		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
-		dispatcher.connect(self.on_mirrored_mode_toggle, signal='mirrorModeToggle', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.load_config, signal='usbConfigFound', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
@@ -116,13 +109,9 @@ class Kermit:
 		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_stop, signal='showStop', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_end, signal='showEnd', sender=dispatcher.Any)
-		dispatcher.connect(self.on_mirrored_mode, signal='onMirroredMode', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
-		dispatcher.connect(self.on_wifi_password_required, signal='wifiPasswordRequired', sender=dispatcher.Any)
-		dispatcher.connect(self.on_wifi_wrong_password, signal='wifiWrongPassword', sender=dispatcher.Any)
-		dispatcher.connect(self.on_wifi_disconnected, signal='wifiDisconnected', sender=dispatcher.Any)
 
 	def load_config(self, path: str = "") -> None:
 		if not path:
@@ -191,18 +180,15 @@ class Kermit:
 		self.web_server.broadcast('showListLoaded', show_list)
 
 	def on_show_play(self, show_name: str) -> None:
-		self.wakeword.set_enabled(False)
 		self.show_player.load_show(show_name)
 
 	def on_show_stop(self) -> None:
-		self.wakeword.set_enabled(True)
 		self.show_player.stop_show()
 
 	def on_show_end(self) -> None:
 		self.wakeword.set_enabled(True)
 
 	def on_show_pause(self) -> None:
-		self.wakeword.set_enabled(True)
 		self.show_player.toggle_pause()
 
 	def on_connect_event(self, client_ip: str) -> None:
@@ -219,6 +205,7 @@ class Kermit:
 	def on_wakeword_event(self) -> None:
 		def handle():
 			self.wakeword.set_enabled(False)
+			self.show_player.stop_show()
 			self.stt.listen_once()
 		threading.Thread(target=handle, daemon=True).start()
 
@@ -231,14 +218,13 @@ class Kermit:
 		print(f"Heard: {text}")
 		if self._awaiting_followup or not self.voiceCommandHandler.parse(text):
 			self._awaiting_followup = False
-			print("SEND LLM!")
 			self.llm.send(text)
 			self.wakeword.set_enabled(False)
 		else:
 			self.wakeword.set_enabled(True)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
-		if text.endswith("????"):
+		if text.endswith("[?]"):
 			self._awaiting_followup = True
 			text = text[:-4].strip()
 		else:
@@ -266,24 +252,8 @@ class Kermit:
 			else:
 				self.wakeword.set_enabled(True)
 
-	def on_key_event(self, key: any, val: any) -> None:
-		try:
-			self.movements.execute_movement(str(key).lower(), val)
-		except Exception as e:
-			print(f"Invalid key: {e}")
-
 	def on_update_status(self, id: str, value: any = None) -> None:
 		self.web_server.broadcast('statusUpdate', {"id": id, "value": value})
-
-	def on_mirrored_mode(self, val: any) -> None:
-		self.movements.set_mirrored(val)
-
-	def on_mirrored_mode_toggle(self) -> None:
-		new_mirror_mode = not self.movements.b_mirrored
-		self.movements.set_mirrored(new_mirror_mode)
-
-	def on_connect_to_wifi_network(self, ssid: str, password: any = None) -> None:
-		self.wifi_management.connect(ssid, password if password else None)
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
@@ -291,6 +261,9 @@ class Kermit:
 	# -------------------------------------------------------------------------
 	# WiFi signal handlers
 	# -------------------------------------------------------------------------
+
+	def on_connect_to_wifi_network(self, ssid: str, password: any = None) -> None:
+		self.wifi_management.connect(ssid, password if password else None)
 
 	def on_wifi_scan_complete(self, networks: list) -> None:
 		self.wifi_access_points = networks
@@ -309,19 +282,6 @@ class Kermit:
 			if match:
 				signal_strength = match['signal_strength']
 		self.web_server.broadcast('wifiConnected', {'ssid': ssid, 'signal': signal_strength})
-
-	def on_wifi_password_required(self, ssid: str) -> None:
-		print(f"WiFi password required for: {ssid}")
-		self.web_server.broadcast('wifiPasswordRequired', {'ssid': ssid})
-
-	def on_wifi_wrong_password(self, ssid: str) -> None:
-		print(f"WiFi wrong password for: {ssid}")
-		self.web_server.broadcast('wifiWrongPassword', {'ssid': ssid})
-
-	def on_wifi_disconnected(self) -> None:
-		print("WiFi disconnected.")
-		self.web_server.broadcast('wifiDisconnected', {})
-
 
 if __name__ == "__main__":
 	animatronic = Kermit()

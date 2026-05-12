@@ -156,20 +156,28 @@ class Movement:
 					movement.pin2_time = 0
 					self.set_pin(movement.output_pin2, 1 - val, movement)
 
+		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_midi_event, signal='onMidiEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_gamepad_event, signal='gamepadEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_program_blue_event, signal='onProgramBlueEvent', sender=dispatcher.Any)
 
-	def set_mirrored(self, b_mirrored: bool) -> None:
-		if self.b_mirrored == b_mirrored:
+		dispatcher.connect(self.on_mirrored_mode_toggle, signal='mirrorModeToggle', sender=dispatcher.Any)
+		dispatcher.connect(self.set_mirrored, signal='onMirroredMode', sender=dispatcher.Any)
+
+	def set_mirrored(self, val: bool) -> None:
+		if self.b_mirrored == val:
 			return
-		self.b_mirrored = b_mirrored
+		self.b_mirrored = val
 		print(f"Setting mirrored mode: {self.b_mirrored}")
 		for movement in self.all:
 			if movement.mirrored_key:
 				mirrored_key = movement.mirrored_key
 				movement.mirrored_key = movement.key
 				movement.key = mirrored_key
+
+	def on_mirrored_mode_toggle(self) -> None:
+		new_mirror_mode = not self.b_mirrored
+		self.set_mirrored(new_mirror_mode)
 
 	def update_pins(self) -> None:
 		while True:
@@ -217,6 +225,12 @@ class Movement:
 			t = threading.Thread(target=self.update_pins, daemon=True)
 			t.start()
 		return b_do_callback
+
+	def on_key_event(self, key: any, val: any) -> None:
+		try:
+			self.execute_movement(str(key).lower(), val)
+		except Exception as e:
+			print(f"Invalid key: {e}")
 
 	def on_program_blue_event(self, channel: int, val: int) -> None:
 		for movement in self.all:
