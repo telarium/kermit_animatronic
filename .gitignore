@@ -224,3 +224,17 @@ lib/respeaker/
 !lib/whisper/models/.gitkeep
 !lib/whisper/models/download-ggml-model.sh
 lib/whisper/models/*.bin
+
+# Kermit - pl2303 kernel module (keep source, ignore build artifacts)
+!lib/pl2303/
+!lib/pl2303/src/
+!lib/pl2303/src/pl2303.c
+!lib/pl2303/src/pl2303.h
+!lib/pl2303/Makefile
+lib/pl2303/src/*.ko
+lib/pl2303/src/*.o
+lib/pl2303/src/*.mod
+lib/pl2303/src/*.mod.c
+lib/pl2303/src/*.mod.o
+lib/pl2303/src/Module.symvers
+lib/pl2303/src/modules.order

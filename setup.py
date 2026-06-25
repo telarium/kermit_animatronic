@@ -12,7 +12,7 @@ class Setup:
 			"python3-smbus", "python3-evdev", "python3-setuptools", "python3-mido",
 			"python3-flask", "python3-pip",
 			"python3-psutil", "python3-pydispatch", "python3-pygame", "iw",
-			"iproute2", "pyusb", "libusb-package", "webrtcvad",
+			"iproute2",
 			# ALSA audio
 			"alsa-utils", "portaudio19-dev", "ffmpeg",
 		]
@@ -32,13 +32,18 @@ class Setup:
 			# Other pip-only packages
 			"pvporcupine", "rapidfuzz", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
 			"pywifi", "flask-talisman", "requests", "openwakeword", "pyudev", "anthropic", "smbus2",
+			# USB — pip-only, no apt equivalents
+			"pyusb", "webrtcvad",
 			# whisper/STT
 			"pyaudio",
+			# USB-serial for ProgramBlue / PL2303 adapter
+			"pyserial",
 		])
 		self.setup_piper_models()
 		self.setup_whisper_models()
 		self.setup_openwakeword_models()
 		self.setup_respeaker()
+		self.setup_pl2303()
 		self.setup_bashrc()
 
 	def install_packages(self, packages: List[str]) -> None:
@@ -137,6 +142,58 @@ class Setup:
 			print("ReSpeaker repo already present, skipping clone.")
 
 		print("ReSpeaker xvf_host ready.")
+
+	def setup_pl2303(self) -> None:
+		"""Build and install the pl2303 kernel module from source.
+
+		The stock Tegra kernel does not include pl2303. We ship the driver
+		source in lib/pl2303/src/ and build it against the running kernel's
+		headers so it survives JetPack updates.
+		"""
+		import platform
+		script_dir   = os.path.dirname(os.path.abspath(__file__))
+		module_dir   = os.path.join(script_dir, "lib", "pl2303")
+		kernel_ver   = platform.release()
+		install_path = f"/lib/modules/{kernel_ver}/kernel/drivers/usb/serial/pl2303.ko"
+
+		if not os.path.isdir(module_dir):
+			print("lib/pl2303 not found — skipping pl2303 build.")
+			return
+
+		# Skip rebuild if module is already installed for this exact kernel
+		if os.path.exists(install_path):
+			print(f"pl2303: module already installed for {kernel_ver}, skipping build.")
+			subprocess.check_call(["sudo", "modprobe", "usbserial"])
+			subprocess.check_call(["sudo", "modprobe", "pl2303"])
+			return
+
+		print(f"pl2303: building for kernel {kernel_ver}...")
+		try:
+			subprocess.check_call(["make", "-C", module_dir, "all"])
+		except subprocess.CalledProcessError as e:
+			print(f"pl2303: build failed — {e}")
+			print("Ensure linux-headers are installed for the running kernel.")
+			sys.exit(1)
+
+		print(f"pl2303: installing to {install_path}...")
+		subprocess.check_call([
+			"sudo", "cp",
+			os.path.join(module_dir, "src", "pl2303.ko"),
+			install_path,
+		])
+		subprocess.check_call(["sudo", "depmod", "-a"])
+
+		print("pl2303: loading module...")
+		subprocess.check_call(["sudo", "modprobe", "usbserial"])
+		subprocess.check_call(["sudo", "modprobe", "pl2303"])
+
+		print("pl2303: enabling on boot...")
+		subprocess.check_call(
+			"echo pl2303 | sudo tee /etc/modules-load.d/pl2303.conf",
+			shell=True,
+		)
+
+		print("pl2303: done.")
 
 	def setup_bashrc(self) -> None:
 		"""Add required environment variables to ~/.bashrc if not already present."""

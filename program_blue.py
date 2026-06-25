@@ -3,10 +3,10 @@
 program_blue.py
 
 Interface for communicating with ProgramBlue animatronic software over
-RS-232 via an SC16IS752 I2C-to-UART bridge.
+RS-232 via a USB-to-serial adapter (PL2303 or similar).
 
 Hardware path:
-	PC (ProgramBlue) → USB-RS232 → DB9 → MAX3232 → SC16IS752 → I2C1 → Jetson Orin Nano
+	PC (ProgramBlue) → USB-RS232 → DB9 null-modem → DB9 → USB-serial → Jetson Orin Nano
 
 Protocol (reverse-engineered from USBPcap capture):
 	- Frame length : 38 bytes
@@ -23,6 +23,22 @@ Protocol (reverse-engineered from USBPcap capture):
 	- Bytes [3-25] : currently observed as zero (reserved / unknown)
 	- Bytes [27-37]: currently observed as zero (reserved / unknown)
 
+Handshake (reverse-engineered from USBPcap capture):
+	ProgramBlue sends single-byte commands before and during playback.
+	The board must respond or ProgramBlue will not proceed.
+
+	CMD 'Y' (0x59) — identification query
+	  → respond: "SP2" (0x53 0x50 0x32)
+
+	CMD 'W' (0x57) — status/version query
+	  → respond: 0x00 0x00 0x6C 0x4D
+
+	CMD 'M' (0x4D) — start/continue status stream
+	  → respond: 0x18 0x00 0x00, then keep streaming at STREAM_HZ
+
+	Command bytes are only intercepted when no partial frame is being
+	assembled, preventing false-positives inside 0xAB frames.
+
 Dispatched signals:
 	"onProgramBlueEvent" — fired for each channel whose state changed;
 	                       kwargs: channel (int, 0-15), val (int, 0 or 1)
@@ -30,42 +46,17 @@ Dispatched signals:
 
 import threading
 import time
-import smbus2
-import struct
-import os
+import serial
 import re
-from typing import Optional, Any
+from typing import Optional
 from pydispatch import dispatcher
-
-
-# ─── SC16IS752 Register Map ───────────────────────────────────────────────────
-
-CH_A = 0b00		# UART channel A — RS-232 / ProgramBlue
-
-def _reg(reg: int, ch: int = CH_A) -> int:
-	"""Build SC16IS752 subaddress byte: reg[3:0] << 3 | ch << 1."""
-	return (reg << 3) | (ch << 1)
-
-REG_RHR  = 0x00	# Receive Holding Register  (read)
-REG_THR  = 0x00	# Transmit Holding Register (write)
-REG_FCR  = 0x02	# FIFO Control Register     (write)
-REG_LCR  = 0x03	# Line Control Register
-REG_LSR  = 0x05	# Line Status Register
-REG_DLL  = 0x00	# Divisor Latch Low  (when LCR[7]=1)
-REG_DLH  = 0x01	# Divisor Latch High (when LCR[7]=1)
-
-LSR_DATA_READY    = 0x01
-LSR_OVERRUN_ERROR = 0x02
-LSR_THR_EMPTY     = 0x20
 
 
 # ─── Hardware Config ──────────────────────────────────────────────────────────
 
-I2C_BUS        = 1		# I2C1 on Jetson Orin Nano 40-pin header
-SC16IS752_ADDR = 0x48	# A0=GND, A1=GND — no conflict with MCP23008 @ 0x20/0x21
+SERIAL_PORT    = "/dev/ttyUSB0"	# PL2303 USB-serial adapter on Jetson
 BAUD_RATE      = 115200
-CRYSTAL_HZ     = 1_843_200	# 1.8432 MHz — gives exact 115200 baud with divisor=1
-POLL_INTERVAL  = 0.002		# 2 ms (~500 Hz)
+POLL_TIMEOUT   = 0.1			# Serial read timeout in seconds
 
 
 # ─── ProgramBlue Protocol ─────────────────────────────────────────────────────
@@ -76,39 +67,74 @@ FRAME_FLAGS   = 0x40	# Fixed value always present at byte 26
 NUM_CHANNELS  = 16		# Channels encoded as bits across bytes 1-2
 
 
+# ─── ProgramBlue Handshake Commands ──────────────────────────────────────────
+
+CMD_IDENTIFY = 0x59		# 'Y' — identification query
+CMD_STATUS   = 0x57		# 'W' — status/version query
+CMD_STREAM   = 0x4D		# 'M' — start/continue status stream
+
+IDENTIFY_RESP = bytes([0x53, 0x50, 0x32])		# "SP2"
+STATUS_RESP   = bytes([0x00, 0x00, 0x6C, 0x4D])
+STREAM_RESP   = bytes([0x18, 0x00, 0x00])
+
+STREAM_HZ     = 50		# Status stream rate in Hz while streaming mode is active
+
+
 class ProgramBlue:
-	def __init__(self) -> None:
-		self._bus = smbus2.SMBus(I2C_BUS)
+	def __init__(self, port: str = SERIAL_PORT) -> None:
+		self._port = port
+		self._ser: Optional[serial.Serial] = None
 		self._rx_buf: bytearray = bytearray()
 		self._stop_event = threading.Event()
 		self._tx_lock = threading.Lock()
+		self._handshake_lock = threading.Lock()
 		self._tx_bitmask: int = 0
 		self._available: bool = False
+		self._streaming: bool = False
 
 		# Track last known channel states to only dispatch on changes
 		self._channel_states: list[int] = [0] * NUM_CHANNELS
 
 		try:
-			self._configure_uart()
+			self._ser = serial.Serial(
+				port=port,
+				baudrate=BAUD_RATE,
+				bytesize=serial.EIGHTBITS,
+				parity=serial.PARITY_NONE,
+				stopbits=serial.STOPBITS_ONE,
+				timeout=POLL_TIMEOUT,
+				# Do not enable hardware flow control — the null-modem adapter
+				# crosses RTS/CTS, and ProgramBlue doesn't require flow control.
+				rtscts=False,
+				dsrdtr=False,
+			)
+			# Drive RTS low so the null-modem's CTS line is satisfied,
+			# mirroring what the SC16IS752 MCR setup did on the old board.
+			self._ser.rts = True
 			self._available = True
-		except OSError as e:
-			print(f"ProgramBlue: SC16IS752 not found on I2C — {e}. Running in offline mode.")
+			print(f"ProgramBlue: opened {port} at {BAUD_RATE} baud, 8N1.")
+		except serial.SerialException as e:
+			print(f"ProgramBlue: could not open {port} — {e}. Running in offline mode.")
 
-		self._thread = threading.Thread(target=self._reader_loop, name="programblue-reader", daemon=True)
-		self._thread.start()
-		print("ProgramBlue: reader started.")
+		self._reader_thread = threading.Thread(
+			target=self._reader_loop, name="programblue-reader", daemon=True
+		)
+		self._stream_thread = threading.Thread(
+			target=self._stream_loop, name="programblue-stream", daemon=True
+		)
+		self._reader_thread.start()
+		self._stream_thread.start()
+		print("ProgramBlue: reader and stream threads started.")
 
 	# ─── Public API ──────────────────────────────────────────────────────────
 
 	def send(self, data: bytes) -> None:
-		"""Write bytes to ProgramBlue over the SC16IS752 TX FIFO."""
-		if not self._available:
+		"""Write bytes to ProgramBlue over the USB-serial TX line."""
+		if not self._available or self._ser is None:
 			return
 		with self._tx_lock:
-			for byte in data:
-				while not (self._read_reg(REG_LSR) & LSR_THR_EMPTY):
-					time.sleep(0.0001)
-				self._write_reg(REG_THR, byte)
+			self._ser.write(data)
+			self._ser.flush()
 
 	def send_channel(self, channel: int, val: int) -> None:
 		"""Update a single channel in the outgoing bitmask and send a frame."""
@@ -128,8 +154,10 @@ class ProgramBlue:
 
 	def stop(self) -> None:
 		self._stop_event.set()
-		self._thread.join(timeout=2)
-		self._bus.close()
+		self._reader_thread.join(timeout=2)
+		self._stream_thread.join(timeout=2)
+		if self._ser and self._ser.is_open:
+			self._ser.close()
 		print("ProgramBlue: stopped.")
 
 	# ─── Reader Loop ─────────────────────────────────────────────────────────
@@ -137,17 +165,49 @@ class ProgramBlue:
 	def _reader_loop(self) -> None:
 		print("ProgramBlue: listening for data...")
 		while not self._stop_event.is_set():
-			if self._available:
-				try:
-					byte = self._read_byte()
-					if byte is not None:
-						self._rx_buf.append(byte)
-						self._try_parse_frame()
-				except OSError as e:
-					print(f"ProgramBlue: I2C error — {e}. Retrying...")
-					time.sleep(0.1)
+			if not self._available or self._ser is None:
+				time.sleep(0.1)
+				continue
+			try:
+				# Blocking read with POLL_TIMEOUT; returns b"" on timeout
+				raw = self._ser.read(1)
+				if raw:
+					self._handle_byte(raw[0])
+			except serial.SerialException as e:
+				print(f"ProgramBlue: serial error — {e}. Retrying...")
+				time.sleep(0.1)
 
-			time.sleep(POLL_INTERVAL)
+	def _handle_byte(self, byte: int) -> None:
+		"""Route incoming byte: handle command bytes or accumulate for frame parsing.
+
+		Command bytes are only intercepted when no partial frame is being
+		assembled, preventing 0x4D / 0x57 / 0x59 inside a frame from being
+		mistakenly treated as commands.
+		"""
+		if not self._rx_buf and byte in (CMD_IDENTIFY, CMD_STATUS, CMD_STREAM):
+			self._handle_command(byte)
+			return
+		self._rx_buf.append(byte)
+		self._try_parse_frame()
+
+	def _handle_command(self, cmd: int) -> None:
+		"""Respond to ProgramBlue handshake commands."""
+		if cmd == CMD_IDENTIFY:
+			print("ProgramBlue: received 'Y' — sending SP2 identification.")
+			with self._handshake_lock:
+				self._streaming = False
+				self._rx_buf.clear()
+				if self._ser:
+					self._ser.reset_input_buffer()
+					self._ser.reset_output_buffer()
+				self.send(IDENTIFY_RESP)
+		elif cmd == CMD_STATUS:
+			with self._handshake_lock:
+				self.send(STATUS_RESP)
+		elif cmd == CMD_STREAM:
+			with self._handshake_lock:
+				self._streaming = True
+				self.send(STREAM_RESP)
 
 	def _try_parse_frame(self) -> None:
 		"""Discard bytes before start marker, then parse complete frames."""
@@ -170,34 +230,21 @@ class ProgramBlue:
 				self._channel_states[ch] = active
 				dispatcher.send(signal="onProgramBlueEvent", channel=ch, val=active)
 
-	# ─── SC16IS752 Helpers ───────────────────────────────────────────────────
+	# ─── Status Stream Loop ───────────────────────────────────────────────────
 
-	def _configure_uart(self) -> None:
-		"""Initialise SC16IS752 channel A for 115200 8N1 with FIFOs enabled."""
-		self._write_reg(REG_LCR, 0x80)		# Enable divisor latch
-		divisor = CRYSTAL_HZ // (BAUD_RATE * 16)
-		self._write_reg(REG_DLL, divisor & 0xFF)
-		self._write_reg(REG_DLH, (divisor >> 8) & 0xFF)
-		self._write_reg(REG_LCR, 0x03)		# 8N1, disable latch
-		self._write_reg(REG_FCR, 0x07)		# Enable + reset TX/RX FIFOs
-		print(f"ProgramBlue: SC16IS752 configured — {BAUD_RATE} baud, 8N1.")
+	def _stream_loop(self) -> None:
+		"""Continuously send STREAM_RESP at STREAM_HZ while streaming mode is active.
 
-	def _write_reg(self, reg: int, value: int, ch: int = CH_A) -> None:
-		self._bus.write_byte_data(SC16IS752_ADDR, _reg(reg, ch), value)
-
-	def _read_reg(self, reg: int, ch: int = CH_A) -> int:
-		return self._bus.read_byte_data(SC16IS752_ADDR, _reg(reg, ch))
-
-	def _read_byte(self) -> Optional[int]:
-		lsr = self._read_reg(REG_LSR)
-		if lsr & LSR_OVERRUN_ERROR:
-			print("ProgramBlue: RX overrun — data lost.")
-		if lsr & LSR_DATA_READY:
-			return self._read_reg(REG_RHR)
-		return None
-
-	def __del__(self):
-		self.stop()
+		ProgramBlue sends 'M' to start the status stream and expects the
+		board to keep broadcasting 0x18 0x00 0x00. This mirrors the BlueSpider's
+		behaviour observed in the USBPcap capture.
+		"""
+		interval = 1.0 / STREAM_HZ
+		while not self._stop_event.is_set():
+			with self._handshake_lock:
+				if self._streaming and self._available:
+					self.send(STREAM_RESP)
+			time.sleep(interval)
 
 
 # ─── Standalone .shw File Parser ─────────────────────────────────────────────
