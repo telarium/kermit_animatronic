@@ -180,7 +180,7 @@ class ShowPlayer:
 			self.paused = False
 			if not self._stop_event.is_set():
 				# Natural end — notify the rest of the system.
-				dispatcher.send(signal="showEnd")
+				dispatcher.send(signal="showStatus", status="end")
 			self.active_show_name = None
 
 	def _dispatch_events(self, current_ms: int) -> None:
