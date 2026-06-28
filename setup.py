@@ -163,35 +163,38 @@ class Setup:
 		# Skip rebuild if module is already installed for this exact kernel
 		if os.path.exists(install_path):
 			print(f"pl2303: module already installed for {kernel_ver}, skipping build.")
-			subprocess.check_call(["sudo", "modprobe", "usbserial"])
-			subprocess.check_call(["sudo", "modprobe", "pl2303"])
-			return
+		else:
+			print(f"pl2303: building for kernel {kernel_ver}...")
+			try:
+				subprocess.check_call(["make", "-C", module_dir, "all"])
+			except subprocess.CalledProcessError as e:
+				print(f"pl2303: build failed — {e}")
+				print("Ensure linux-headers are installed for the running kernel.")
+				sys.exit(1)
 
-		print(f"pl2303: building for kernel {kernel_ver}...")
-		try:
-			subprocess.check_call(["make", "-C", module_dir, "all"])
-		except subprocess.CalledProcessError as e:
-			print(f"pl2303: build failed — {e}")
-			print("Ensure linux-headers are installed for the running kernel.")
-			sys.exit(1)
+			print(f"pl2303: installing to {install_path}...")
+			subprocess.check_call([
+				"sudo", "cp",
+				os.path.join(module_dir, "src", "pl2303.ko"),
+				install_path,
+			])
+			subprocess.check_call(["sudo", "depmod", "-a"])
 
-		print(f"pl2303: installing to {install_path}...")
-		subprocess.check_call([
-			"sudo", "cp",
-			os.path.join(module_dir, "src", "pl2303.ko"),
-			install_path,
-		])
-		subprocess.check_call(["sudo", "depmod", "-a"])
-
-		print("pl2303: loading module...")
+		print("pl2303: loading modules...")
 		subprocess.check_call(["sudo", "modprobe", "usbserial"])
 		subprocess.check_call(["sudo", "modprobe", "pl2303"])
 
 		print("pl2303: enabling on boot...")
 		subprocess.check_call(
-			"echo pl2303 | sudo tee /etc/modules-load.d/pl2303.conf",
+			"printf 'usbserial\\npl2303\\n' | sudo tee /etc/modules-load.d/pl2303.conf",
 			shell=True,
 		)
+
+		# Add the real user (not root) to the dialout group so /dev/ttyUSB*
+		# is accessible without sudo. SUDO_USER is set when running via sudo.
+		real_user = os.environ.get("SUDO_USER", "kermit")
+		subprocess.check_call(["sudo", "usermod", "-aG", "dialout", real_user])
+		print(f"pl2303: added '{real_user}' to dialout group — re-login required to take effect.")
 
 		print("pl2303: done.")
 
