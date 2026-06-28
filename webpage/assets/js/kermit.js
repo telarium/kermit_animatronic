@@ -63,7 +63,7 @@ function handleMobileKeypadVisibility() {
 function updateStatus(id, value) {
 	let statusText = id + ": <span>" + value + "</span>";
 
-	if( value.includes("Hey Kermit")) {
+	if( value.includes("Waiting for")) {
 		const submitButton = document.getElementById('submitTTSButton');
 		if (submitButton) {
 			submitButton.disabled = false;
