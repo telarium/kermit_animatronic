@@ -72,6 +72,7 @@ class Kermit:
 		self.is_running: bool = True
 		self.wifi_access_points = None
 		self._awaiting_followup: bool = False
+		self._prev_show_status: str = "stopped"
 
 		# Initialize components
 		self.wakeword = WakeWord()
@@ -105,10 +106,7 @@ class Kermit:
 		dispatcher.connect(self.on_voice_play_sequence, signal='playVoiceSequence', sender=dispatcher.Any)
 		dispatcher.connect(self.on_voice_playback_event, signal='voicePlaybackEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_show_list_load, signal='showListLoad', sender=dispatcher.Any)
-		dispatcher.connect(self.on_show_play, signal='showPlay', sender=dispatcher.Any)
-		dispatcher.connect(self.on_show_pause, signal='showPause', sender=dispatcher.Any)
-		dispatcher.connect(self.on_show_stop, signal='showStop', sender=dispatcher.Any)
-		dispatcher.connect(self.on_show_end, signal='showEnd', sender=dispatcher.Any)
+		dispatcher.connect(self.on_show_status, signal='showStatus', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
@@ -179,23 +177,24 @@ class Kermit:
 	def on_show_list_load(self, show_list: any) -> None:
 		self.web_server.broadcast('showListLoaded', show_list)
 
-	def on_show_play(self, show_name: str) -> None:
-		self.show_player.load_show(show_name)
-
-	def on_show_stop(self) -> None:
-		self.show_player.stop_show()
-
-	def on_show_end(self) -> None:
-		self.wakeword.set_enabled(True)
-
-	def on_show_pause(self) -> None:
-		self.show_player.toggle_pause()
+	def on_show_status(self, status: str, show_name: str = "") -> None:
+		self._prev_show_status = status
+		self.web_server.broadcast('showStatusUpdated', status)
+		if status == "play":
+			self.show_player.load_show(show_name)
+		elif status == "pause":
+			self.show_player.toggle_pause()
+		elif status == "stop":
+			self.show_player.stop_show()
+		elif status == "end":
+			self.wakeword.set_enabled(True)
 
 	def on_connect_event(self, client_ip: str) -> None:
 		print(f"Web client connected from IP: {client_ip}")
 		self.web_server.broadcast('voiceCommandUpdate', {"id": "idle", "value": ""})
 		self.show_player.get_show_list()
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
+		self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
 			match = next((n for n in (self.wifi_access_points or []) if n['ssid'] == current_ssid), None)
