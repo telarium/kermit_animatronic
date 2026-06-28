@@ -48,8 +48,7 @@ class Movement:
 		self.mouth.description = "Mouth"
 		self.mouth.key = 'x'
 		self.mouth.gamepad_buttons = [Button.LEFT_TRIGGER, Button.RIGHT_TRIGGER, Button.BTN_THUMBL, Button.BTN_THUMBR]
-		self.mouth.output_pin1 = [0x20, 7]  # Mouth open
-		self.mouth.output_pin2 = [0x23, 2]  # Mouth close
+		self.mouth.output_pin1 = [0x20, 0]
 		self.mouth.output_pin1_max_time = 0.75
 		self.mouth.midi_note = 56
 		self.mouth.program_blue_channel = 0
@@ -59,7 +58,7 @@ class Movement:
 		self.head_turn_left.description = "Head Turn L"
 		self.head_turn_left.key = 'a'
 		self.head_turn_left.gamepad_buttons = [Button.LEFT_STICK_LEFT, Button.DPAD_LEFT]
-		self.head_turn_left.output_pin1 = [0x21, 0]
+		self.head_turn_left.output_pin1 = [0x20, 1] 
 		self.head_turn_left.output_pin1_max_time = 1
 		self.head_turn_left.midi_note = 61
 		self.head_turn_left.program_blue_channel = 1
@@ -70,7 +69,7 @@ class Movement:
 		self.head_right.description = "Head Turn R"
 		self.head_right.key = 'd'
 		self.head_right.gamepad_buttons = [Button.LEFT_STICK_RIGHT, Button.DPAD_RIGHT]
-		self.head_right.output_pin1 = [0x23, 3]
+		self.head_right.output_pin1 = [0x20, 2]
 		self.head_right.output_pin1_max_time = 1
 		self.head_right.midi_note = 62
 		self.head_right.program_blue_channel = 2
@@ -81,8 +80,8 @@ class Movement:
 		self.head_tilt_up.description = "Head Tilt Up"
 		self.head_tilt_up.key = 's'
 		self.head_tilt_up.gamepad_buttons = [Button.LEFT_STICK_UP, Button.DPAD_UP]
-		self.head_tilt_up.output_pin1 = [0x20, 3]  # Head tilt down
-		self.head_tilt_up.output_pin2 = [0x21, 6]  # Head tilt up
+		self.head_tilt_up.output_pin1 = [0x20, 5]  # Head tilt up
+		self.head_tilt_up.output_pin2 = [0x20, 6]  # Head tilt down
 		self.head_tilt_up.midi_note = 63
 		self.head_tilt_up.program_blue_channel = 3
 		self.all.append(self.head_tilt_up)
@@ -91,7 +90,7 @@ class Movement:
 		self.head_tilt_left.description = "Head Tilt L"
 		self.head_tilt_left.key = 'q'
 		self.head_tilt_left.gamepad_buttons = [Button.LEFT_BUMPER]
-		self.head_tilt_left.output_pin1 = [0x21, 0]
+		self.head_tilt_left.output_pin1 = [0x20, 4]
 		self.head_tilt_left.output_pin1_max_time = 1
 		self.head_tilt_left.midi_note = 61
 		self.head_tilt_left.program_blue_channel = 4
@@ -102,7 +101,7 @@ class Movement:
 		self.head_tilt_right.description = "Head Tilt R"
 		self.head_tilt_right.key = 'e'
 		self.head_tilt_right.gamepad_buttons = [Button.RIGHT_BUMPER]
-		self.head_tilt_right.output_pin1 = [0x21, 0]
+		self.head_tilt_right.output_pin1 = [0x20, 3]
 		self.head_tilt_right.output_pin1_max_time = 1
 		self.head_tilt_right.midi_note = 61
 		self.head_tilt_right.program_blue_channel = 5
@@ -113,8 +112,7 @@ class Movement:
 		self.body_lean_up.description = "Body Lean Up"
 		self.body_lean_up.key = 'w'
 		self.body_lean_up.gamepad_buttons = [Button.RIGHT_STICK_UP, Button.BTN_NORTH]
-		self.body_lean_up.output_pin1 = [0x23, 4]  # Lean up
-		self.body_lean_up.output_pin2 = [0x21, 1]  # Lean down
+		self.body_lean_up.output_pin1 = [0x20, 7]
 		self.body_lean_up.midi_note = 64
 		self.body_lean_up.program_blue_channel = 6
 		self.all.append(self.body_lean_up)
@@ -123,7 +121,7 @@ class Movement:
 		self.body_turn_left.description = "Body Turn Left"
 		self.body_turn_left.key = 'z'
 		self.body_turn_left.gamepad_buttons = [Button.RIGHT_STICK_LEFT, Button.BTN_WEST]
-		self.body_turn_left.output_pin1 = [0x23, 4]  # Body turn L
+		self.body_turn_left.output_pin1 = [0x21, 0]
 		self.body_turn_left.midi_note = 64
 		self.body_turn_left.program_blue_channel = 7
 		self.body_turn_left.mirrored_key = 'c'
@@ -133,7 +131,7 @@ class Movement:
 		self.body_turn_right.description = "Body Turn Right"
 		self.body_turn_right.key = 'c'
 		self.body_turn_right.gamepad_buttons = [Button.RIGHT_STICK_RIGHT, Button.BTN_EAST]
-		self.body_turn_right.output_pin1 = [0x23, 4]  # Body turn R
+		self.body_turn_right.output_pin1 = [0x21, 1]
 		self.body_turn_right.midi_note = 64
 		self.body_turn_right.program_blue_channel = 8
 		self.body_turn_right.mirrored_key = 'z'
