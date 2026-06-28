@@ -23,6 +23,9 @@ class WakeWord:
 		self._enabled = False
 		self._thread = None
 		self._stop_event = threading.Event()
+		# Callers can wait on this to know the mic stream has fully closed.
+		self._stopped_event = threading.Event()
+		self._stopped_event.set()  # starts in the "stopped" state
 		self.threshold: float = 0.3
 
 		_devnull = open(os.devnull, 'w')
@@ -59,6 +62,7 @@ class WakeWord:
 		if enabled and not self._enabled:
 			self._enabled = True
 			self._stop_event.clear()
+			self._stopped_event.clear()
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
 			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Okay Kermit'...")
@@ -66,10 +70,11 @@ class WakeWord:
 		elif not enabled and self._enabled:
 			self._enabled = False
 			self._stop_event.set()
-			if self._thread:
-				self._thread.join(timeout=3)
-				self._thread = None
 			print("WakeWord: listening stopped.")
+
+	def wait_until_stopped(self, timeout: float = 4.0) -> bool:
+		"""Block until the mic stream has fully closed. Returns True if stopped in time."""
+		return self._stopped_event.wait(timeout=timeout)
 
 	# -------------------------------------------------------------------------
 	# Internal
@@ -113,39 +118,49 @@ class WakeWord:
 		return stream
 
 	def _listen_loop(self) -> None:
-		while not self._stop_event.is_set():
-			try:
-				device_index = self._find_device_index()
-				stream = self._open_stream(device_index)
-
+		try:
+			while not self._stop_event.is_set():
 				try:
-					while not self._stop_event.is_set():
-						audio = stream.read(self.CHUNK, exception_on_overflow=False)
-						audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
-						audio_mono = audio_np[:, 0]
+					device_index = self._find_device_index()
+					stream = self._open_stream(device_index)
 
-						prediction = self._oww.predict(audio_mono)
-						score = prediction.get("okay_ker_mit", 0)
-
-						#if score > 0.05:
-						#	print(f"score: {score:.3f}")
-
-						if score > self.threshold:
-							print(f"'Okay Kermit' detected! (score: {score:.2f})")
-							dispatcher.send(signal="wakewordEvent")
-							self._oww.reset()
-							if self.on_detected:
-								self.on_detected(score)
-				finally:
 					try:
-						stream.stop_stream()
-						stream.close()
-					except Exception:
-						pass
+						while not self._stop_event.is_set():
+							audio = stream.read(self.CHUNK, exception_on_overflow=False)
+							audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
+							audio_mono = audio_np[:, 0]
 
-			except Exception as e:
-				print(f"WakeWord: error in listen loop: {e}")
-				time.sleep(2)
+							prediction = self._oww.predict(audio_mono)
+							score = prediction.get("okay_ker_mit", 0)
+
+							#if score > 0.05:
+							#	print(f"score: {score:.3f}")
+
+							if score > self.threshold:
+								print(f"Wakeword detected! (score: {score:.2f})")
+								self._stop_event.set()
+								self._enabled = False
+								self._oww.reset()
+								# Dispatch after stopping so the handler can safely open
+								# the mic (arecord) without contending with this stream.
+								dispatcher.send(signal="wakewordEvent")
+								if self.on_detected:
+									self.on_detected(score)
+								# Inner loop exits because _stop_event is now set.
+					finally:
+						try:
+							stream.stop_stream()
+							stream.close()
+						except Exception:
+							pass
+
+				except Exception as e:
+					print(f"WakeWord: error in listen loop: {e}")
+					time.sleep(2)
+		finally:
+			# Signal that the mic stream is fully closed, whatever the exit reason.
+			self._stopped_event.set()
+			print("WakeWord: listen loop exited.")
 
 	def __del__(self):
 		self.set_enabled(False)
@@ -154,7 +169,7 @@ class WakeWord:
 
 if __name__ == "__main__":
 	def on_detected(score):
-		print(f">> Okay Kermit heard! score={score:.2f}")
+		print(f">> Wakeword heard! score={score:.2f}")
 
 	ww = WakeWord(on_detected=on_detected)
 	ww.set_enabled(True)
