@@ -131,7 +131,7 @@ class WakeWord:
 							audio_mono = audio_np[:, 0]
 
 							prediction = self._oww.predict(audio_mono)
-							score = prediction.get("okay_ker_mit", 0)
+							score = prediction.get(os.path.splitext(os.path.basename(self.MODEL_PATH))[0], 0)
 
 							#if score > 0.05:
 							#	print(f"score: {score:.3f}")
