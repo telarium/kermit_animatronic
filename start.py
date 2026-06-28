@@ -47,6 +47,7 @@ usb_monitor.init_respeaker()
 import signal
 import threading
 import ctypes
+import configparser
 from pydispatch import dispatcher
 from web_io import WebServer
 from wakeword_detection import WakeWord
@@ -66,6 +67,23 @@ _devnull.close()
 
 print("Startup complete.")
 
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_hardware_config(config_path: str) -> str:
+	"""Read the hardware JSON path from config.cfg. Exits if missing or not found."""
+	cfg = configparser.ConfigParser()
+	cfg.read(config_path)
+	json_path = cfg.get("Hardware", "config", fallback="").strip()
+	if not json_path:
+		print("Error: 'config' not specified under [Hardware] in config.cfg. Cannot proceed.", file=sys.stderr)
+		sys.exit(1)
+	abs_path = os.path.join(_BASE_DIR, json_path)
+	if not os.path.exists(abs_path):
+		print(f"Error: Hardware config not found at '{abs_path}'. Cannot proceed.", file=sys.stderr)
+		sys.exit(1)
+	return abs_path
+
 
 class Kermit:
 	def __init__(self) -> None:
@@ -73,6 +91,12 @@ class Kermit:
 		self.wifi_access_points = None
 		self._awaiting_followup: bool = False
 		self._prev_show_status: str = "stopped"
+		self._prev_status_id: str = ""
+		self._prev_status_value: any = None
+
+		# Load config to get hardware JSON path before initializing components
+		config_path = os.path.join(_BASE_DIR, "config.cfg")
+		hardware_config_path = _load_hardware_config(config_path)
 
 		# Initialize components
 		self.wakeword = WakeWord()
@@ -80,7 +104,7 @@ class Kermit:
 		self.tts = TextToSpeech()
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame)
-		self.movements = Movement()
+		self.movements = Movement(hardware_config_path)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)
@@ -117,7 +141,7 @@ class Kermit:
 			if os.path.exists(usb_cfg):
 				path = usb_cfg
 			else:
-				path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.cfg")
+				path = os.path.join(_BASE_DIR, "config.cfg")
 
 		if os.path.exists(path):
 			self.config_path = path
@@ -195,13 +219,12 @@ class Kermit:
 		self.show_player.get_show_list()
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
+		self.on_update_status(self._prev_status_id, self._prev_status_value)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
 			match = next((n for n in (self.wifi_access_points or []) if n['ssid'] == current_ssid), None)
 			self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength'] if match else 0})
 		self.wifi_management.scan()
-
-		self.on_update_status(self.prev_status_id, self.prev_status_value)
 
 	def on_wakeword_event(self) -> None:
 		def handle():
@@ -255,9 +278,9 @@ class Kermit:
 				self.wakeword.set_enabled(True)
 
 	def on_update_status(self, id: str, value: any = None) -> None:
+		self._prev_status_id = id
+		self._prev_status_value = value
 		self.web_server.broadcast('statusUpdate', {"id": id, "value": value})
-		self.prev_status_id = id
-		self.prev_status_value = value
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
