@@ -41,15 +41,15 @@ class WebServer:
 
 	@socketio.on('showPlay')
 	def show_play_event(show_name: str) -> None:
-		dispatcher.send(signal='showPlay', show_name=show_name)
+		dispatcher.send(signal='showStatus', status='play', show_name=show_name)
 
 	@socketio.on('showStop')
 	def show_stop_event() -> None:
-		dispatcher.send(signal='showStop')
+		dispatcher.send(signal='showStatus', status='stop')
 
 	@socketio.on('showPause')
 	def show_pause_event() -> None:
-		dispatcher.send(signal='showPause')
+		dispatcher.send(signal='showStatus', status='pause')
 
 	@socketio.on('onMirroredMode')
 	def mirrored_mode_event(bEnable: bool) -> None:
