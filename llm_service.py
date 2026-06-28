@@ -82,12 +82,12 @@ class LLM:
 		messages = self._build_messages(query)
 		system_prompt = self.llm_context + self.CONTEXT_POSTFIX
 
-		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=str)
+		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=query)
 
 		# Try Anthropic (Claude) first
 		if self.anthropic_key:
 			try:
-				client = anthropic.Anthropic(api_key=self.anthropic_key)
+				client = anthropic.Anthropic(api_key=self.anthropic_key, timeout=10.0)
 				result = client.messages.create(
 					model=self.anthropic_model,
 					max_tokens=1024,
@@ -101,7 +101,7 @@ class LLM:
 		# Fall back to OpenAI
 		if response is None and self.openai_key:
 			try:
-				client = OpenAI(api_key=self.openai_key)
+				client = OpenAI(api_key=self.openai_key, timeout=10.0)
 				result = client.chat.completions.create(
 					model="gpt-4o-mini",
 					messages=[{"role": "system", "content": system_prompt}, *messages],
@@ -116,6 +116,7 @@ class LLM:
 				client = OpenAI(
 					api_key=self.deepseek_api_key,
 					base_url="https://api.deepseek.com",
+					timeout=10.0,
 				)
 				result = client.chat.completions.create(
 					model=self.deepseek_model,
