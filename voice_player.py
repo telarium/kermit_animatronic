@@ -107,6 +107,7 @@ class VoicePlayer:
 		print(f"VoicePlayer: worker started, {len(filenames)} file(s)")
 		self._wake_dac_if_needed()
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True)
+		dispatcher.send(signal="updateStatus", id="Voice Playback", value="Speaking...")
 		for filename in filenames:
 			if self._stop_event.is_set():
 				break
