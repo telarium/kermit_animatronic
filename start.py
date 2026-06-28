@@ -48,6 +48,7 @@ import signal
 import threading
 import ctypes
 import configparser
+import json
 from pydispatch import dispatcher
 from web_io import WebServer
 from wakeword_detection import WakeWord
@@ -70,8 +71,8 @@ print("Startup complete.")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load_hardware_config(config_path: str) -> str:
-	"""Read the hardware JSON path from config.cfg. Exits if missing or not found."""
+def _load_hardware_config(config_path: str) -> dict:
+	"""Read the hardware JSON path from config.cfg, load and return its contents. Exits if missing or not found."""
 	cfg = configparser.ConfigParser()
 	cfg.read(config_path)
 	json_path = cfg.get("Hardware", "config", fallback="").strip()
@@ -82,7 +83,10 @@ def _load_hardware_config(config_path: str) -> str:
 	if not os.path.exists(abs_path):
 		print(f"Error: Hardware config not found at '{abs_path}'. Cannot proceed.", file=sys.stderr)
 		sys.exit(1)
-	return abs_path
+	with open(abs_path, 'r') as f:
+		hardware = json.load(f)
+	hardware['_path'] = abs_path
+	return hardware
 
 
 class Kermit:
@@ -96,15 +100,20 @@ class Kermit:
 
 		# Load config to get hardware JSON path before initializing components
 		config_path = os.path.join(_BASE_DIR, "config.cfg")
-		hardware_config_path = _load_hardware_config(config_path)
+		hardware = _load_hardware_config(config_path)
+
+		wakeword_model  = os.path.join(_BASE_DIR, hardware['wakeword']['model'])
+		wakeword_desc   = hardware['wakeword']['description']
+		voices_dir      = os.path.join(_BASE_DIR, hardware['voice_directory'])
+		hardware_path   = hardware['_path']
 
 		# Initialize components
-		self.wakeword = WakeWord()
+		self.wakeword = WakeWord(model_path=wakeword_model, description=wakeword_desc)
 		self.stt = SpeechToText()
 		self.tts = TextToSpeech()
 		self.llm = LLM()
-		self.voice_player = VoicePlayer(pygame)
-		self.movements = Movement(hardware_config_path)
+		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir)
+		self.movements = Movement(hardware_path)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)

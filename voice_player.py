@@ -12,7 +12,7 @@ from typing import List, Optional, Any
 USB_VOICES_DIR = "/mnt/usb/voices"
 
 class VoicePlayer:
-	def __init__(self, pygame_instance: Any, threshold: float = 0.15, interval_ms: int = 25) -> None:
+	def __init__(self, pygame_instance: Any, voices_dir: str, threshold: float = 0.15, interval_ms: int = 25) -> None:
 		self.pygame = pygame_instance
 
 		if not isinstance(threshold, (int, float)):
@@ -26,8 +26,7 @@ class VoicePlayer:
 		self._last_play_time: float = 0.0
 		self._dac_wake_threshold: float = 2.0  # seconds of idle before DAC needs waking
 
-		script_dir = os.path.dirname(os.path.abspath(__file__))
-		self._local_voices_dir = os.path.join(script_dir, "voices")
+		self._local_voices_dir = voices_dir
 
 	# -------------------------------------------------------------------------
 	# Public API

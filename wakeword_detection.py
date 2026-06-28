@@ -10,15 +10,16 @@ from openwakeword.model import Model
 
 
 class WakeWord:
-	MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/openwakeword/okay_ker_mit.onnx")
-	XVF_PY     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
+	XVF_PY  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
 
 	CHUNK    = 1280
 	FORMAT   = pyaudio.paInt16
 	CHANNELS = 2
 	RATE     = 16000
 
-	def __init__(self, on_detected=None):
+	def __init__(self, model_path: str, description: str, on_detected=None):
+		self.model_path = model_path
+		self.description = description
 		self.on_detected = on_detected
 		self._enabled = False
 		self._thread = None
@@ -32,7 +33,7 @@ class WakeWord:
 		_old_stderr = os.dup(2)
 		os.dup2(_devnull.fileno(), 2)
 		self._oww = Model(
-			wakeword_models=[self.MODEL_PATH],
+			wakeword_models=[self.model_path],
 			inference_framework="onnx",
 			vad_threshold=0.0
 		)
@@ -41,7 +42,7 @@ class WakeWord:
 		os.close(_old_stderr)
 		_devnull.close()
 
-		print(f"WakeWord: model loaded from {self.MODEL_PATH}")
+		print(f"WakeWord: model loaded from {self.model_path}")
 
 	# -------------------------------------------------------------------------
 	# Public API
@@ -65,7 +66,7 @@ class WakeWord:
 			self._stopped_event.clear()
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
-			dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Waiting for 'Okay Kermit'...")
+			dispatcher.send(signal="updateStatus", id="Voice Command Status", value=f"Waiting for '{self.description}'...")
 			print("WakeWord: listening started.")
 		elif not enabled and self._enabled:
 			self._enabled = False
@@ -131,7 +132,7 @@ class WakeWord:
 							audio_mono = audio_np[:, 0]
 
 							prediction = self._oww.predict(audio_mono)
-							score = prediction.get(os.path.splitext(os.path.basename(self.MODEL_PATH))[0], 0)
+							score = prediction.get(os.path.splitext(os.path.basename(self.model_path))[0], 0)
 
 							#if score > 0.05:
 							#	print(f"score: {score:.3f}")
@@ -171,7 +172,11 @@ if __name__ == "__main__":
 	def on_detected(score):
 		print(f">> Wakeword heard! score={score:.2f}")
 
-	ww = WakeWord(on_detected=on_detected)
+	ww = WakeWord(
+		model_path="lib/openwakeword/okay_ker_mit.onnx",
+		description="Okay Kermit",
+		on_detected=on_detected,
+	)
 	ww.set_enabled(True)
 
 	try:
