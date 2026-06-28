@@ -110,6 +110,38 @@ socket.on('showListLoaded', (data) => {
 	}
 });
 
+// Handle play, pause, and stop button state based on show status
+function updateShowButtons(status) {
+	const playButton = document.getElementById('playButton');
+	const pauseButton = document.getElementById('pauseButton');
+	const stopButton = document.getElementById('stopButton');
+	if (!playButton || !pauseButton || !stopButton) return;
+
+	const setEnabled = (btn, enabled) => {
+		btn.disabled = !enabled;
+		btn.classList.toggle('disabled', !enabled);
+	};
+
+	if (status === 'play') {
+		// Playing: can pause or stop, but not play again
+		setEnabled(playButton, false);
+		setEnabled(pauseButton, true);
+		setEnabled(stopButton, true);
+	} else if (status === 'pause') {
+		// Paused: can play (resume) or stop, but not pause again
+		setEnabled(playButton, true);
+		setEnabled(pauseButton, false);
+		setEnabled(stopButton, true);
+	} else {
+		// Stopped / ended / idle: can only play
+		setEnabled(playButton, true);
+		setEnabled(pauseButton, false);
+		setEnabled(stopButton, false);
+	}
+}
+
+socket.on('showStatusUpdated', (status) => updateShowButtons(status));
+
 // Handle play, pause, and stop buttons for shows
 function setupShowControlButtons() {
 	const playButton = document.getElementById('playButton');
@@ -123,7 +155,7 @@ function setupShowControlButtons() {
 
 			if (selectedShow) {
 				if (dropdown.selectedIndex === 0) {
-					alert('Mama mia! Please select a show first!');
+					alert('Please select a show first!');
 				} else {
 					socket.emit('showPlay', selectedShow);
 					console.log(`Playing show: ${selectedShow}`);
