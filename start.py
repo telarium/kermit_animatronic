@@ -202,15 +202,18 @@ class Kermit:
 			self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength'] if match else 0})
 		self.wifi_management.scan()
 
+		self.on_update_status(self.prev_status_id, self.prev_status_value)
+
 	def on_wakeword_event(self) -> None:
 		def handle():
-			self.wakeword.set_enabled(False)
 			self.show_player.stop_show()
+			if not self.wakeword.wait_until_stopped(timeout=4.0):
+				print("WakeWord: timed out waiting for stream to close, proceeding anyway.")
 			self.stt.listen_once()
 		threading.Thread(target=handle, daemon=True).start()
 
 	def on_transcription_result(self, text: str) -> None:
-		if not text:
+		if not text or text == "[SILENCE]":
 			if self._awaiting_followup:
 				self._awaiting_followup = False
 			self.wakeword.set_enabled(True)
@@ -254,6 +257,8 @@ class Kermit:
 
 	def on_update_status(self, id: str, value: any = None) -> None:
 		self.web_server.broadcast('statusUpdate', {"id": id, "value": value})
+		self.prev_status_id = id
+		self.prev_status_value = value
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
