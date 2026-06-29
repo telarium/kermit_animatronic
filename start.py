@@ -116,8 +116,8 @@ class Kermit:
 		self.movements = Movement(hardware_path)
 		self.web_server = WebServer()
 		self.wifi_management = WifiManagement()
-		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management)
 		self.show_player = ShowPlayer(pygame)
+		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management, self.show_player)
 
 		self.set_dispatch_events()
 		self.wakeword.set_enabled(True)
