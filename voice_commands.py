@@ -70,8 +70,9 @@ class VoiceCommandHandler:
 
 	CONFIDENCE_THRESHOLD = 80
 
-	def __init__(self, wifi_management) -> None:
+	def __init__(self, wifi_management, show_player) -> None:
 		self._wifi_management = wifi_management
+		self._show_player = show_player
 		self._phrase_map = [
 			(phrase, intent_name)
 			for intent_name, phrases in self.INTENTS.items()
@@ -91,8 +92,8 @@ class VoiceCommandHandler:
 		# 1. Check play-by-name first (e.g. "play Rainbow Connection")
 		song_name = self._match_play_by_name(text)
 		if song_name is not None:
-			self._handle_play_by_name(song_name)
-			return True
+			if self._handle_play_by_name(song_name):
+				return True
 
 		# 2. Check connect-to-wifi prefix (e.g. "connect to MyNetwork")
 		ssid_name = self._match_connect_wifi(text)
@@ -173,11 +174,33 @@ class VoiceCommandHandler:
 
 	def _handle_sing(self) -> None:
 		print("VoiceCommandHandler: sing")
-		# TODO: pick a random show and dispatch showPlay
+		show_list = self._show_player.show_list
+		if not show_list:
+			print("VoiceCommandHandler: no shows available.")
+			return
+		show_name = random.choice(show_list)
+		print(f"VoiceCommandHandler: randomly selected show '{show_name}'")
+		dispatcher.send(signal='showStatus', status='play', show_name=show_name)
 
-	def _handle_play_by_name(self, song_name: str) -> None:
-		print(f"VoiceCommandHandler: play by name — '{song_name}'")
-		# TODO: pass song_name to show resolver class
+	def _handle_play_by_name(self, song_name: str) -> bool:
+		"""
+		Fuzzy-match song_name against the available show list.
+		Dispatches showStatus if confident. Returns True if a match was found.
+		"""
+		show_list = self._show_player.show_list
+		if not show_list:
+			print("VoiceCommandHandler: no shows available.")
+			return False
+
+		match = process.extractOne(song_name, show_list, scorer=fuzz.ratio)
+		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
+			matched_show = match[0]
+			print(f"VoiceCommandHandler: play by name — '{song_name}' matched '{matched_show}' (score={match[1]})")
+			dispatcher.send(signal='showStatus', status='play', show_name=matched_show)
+			return True
+
+		print(f"VoiceCommandHandler: play by name — no confident match for '{song_name}' (best score={match[1] if match else 0})")
+		return False
 
 	def _handle_connect_wifi(self, ssid: str) -> None:
 		print(f"VoiceCommandHandler: connect to wifi requested for '{ssid}'")
