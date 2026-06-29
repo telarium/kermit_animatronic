@@ -10,7 +10,7 @@
 			"key": "x",
 			"key_mirror": null,
 			"gamepad_buttons": ["LEFT_TRIGGER", "RIGHT_TRIGGER", "BTN_THUMBL", "BTN_THUMBR"],
-			"midi_note": 56,
+			"midi_note": 60,
 			"program_blue_channel": 0,
 			"inverted": false,
 			"gpio": {
@@ -59,7 +59,7 @@
 			"key": "q",
 			"key_mirror": "e",
 			"gamepad_buttons": ["LEFT_BUMPER"],
-			"midi_note": 61,
+			"midi_note": 64,
 			"program_blue_channel": 4,
 			"inverted": false,
 			"gpio": {
@@ -71,7 +71,7 @@
 			"key": "e",
 			"key_mirror": "q",
 			"gamepad_buttons": ["RIGHT_BUMPER"],
-			"midi_note": 61,
+			"midi_note": 65,
 			"program_blue_channel": 5,
 			"inverted": false,
 			"gpio": {
@@ -83,7 +83,7 @@
 			"key": "w",
 			"key_mirror": null,
 			"gamepad_buttons": ["RIGHT_STICK_UP", "BTN_NORTH"],
-			"midi_note": 64,
+			"midi_note": 66,
 			"program_blue_channel": 6,
 			"inverted": false,
 			"gpio": {
@@ -95,7 +95,7 @@
 			"key": "z",
 			"key_mirror": "c",
 			"gamepad_buttons": ["RIGHT_STICK_LEFT", "BTN_WEST"],
-			"midi_note": 64,
+			"midi_note": 67,
 			"program_blue_channel": 7,
 			"inverted": false,
 			"gpio": {
@@ -107,7 +107,7 @@
 			"key": "c",
 			"key_mirror": "z",
 			"gamepad_buttons": ["RIGHT_STICK_RIGHT", "BTN_EAST"],
-			"midi_note": 64,
+			"midi_note": 68,
 			"program_blue_channel": 8,
 			"inverted": false,
 			"gpio": {
