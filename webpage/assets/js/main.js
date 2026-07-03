@@ -1,5 +1,5 @@
 /*
-	Pasqually Chuck E Cheese Animatronic Restoration Project by Andrew Langley (@telarium)
+	Animatronic Restoration Project by Andrew Langley
 	HTML design based on "Full Motion" by TEMPLATED
 	Released for free under the Creative Commons Attribution 3.0 license (templated.co/license)
 */
