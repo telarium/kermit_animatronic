@@ -4,6 +4,10 @@
 		"description": "Okay Kermit"
 	},
 	"voice_directory": "voices/kermit/",
+	"html": {
+		"css_file": "webpage/assets/css/kermit.css",
+		"html_title": "Hi ho! Kermit the Frog here!"
+	},
 	"movements": [
 		{
 			"description": "Mouth",

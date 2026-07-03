@@ -115,17 +115,16 @@ hr {
     z-index: -5;
 }
 
-#banner img {
+/* Character background image lives here so the HTML stays character-agnostic. */
+#banner::after {
+    content: "";
     position: fixed;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: auto;
-    height: auto;
-    min-width: 1200px;
-    max-width: 1200px;
+    inset: 0;
+    background: url("../../images/kermit_bg.jpg") no-repeat bottom center;
+    background-size: 1200px auto;
     opacity: 0.8;
     z-index: -5;
+    pointer-events: none;
 }
 
 /* =========================================================
@@ -524,11 +523,9 @@ button:disabled,
         max-width: none;
     }
 
-    /* Kermit background: keep it tall enough to feel present */
-    #banner img {
-        min-width: 600px;
-        max-width: 600px;
-        width: 600px;
+    /* Character background: keep it tall enough to feel present */
+    #banner::after {
+        background-size: 600px auto;
     }
 
     /* Popup */

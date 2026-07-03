@@ -106,6 +106,7 @@ class Kermit:
 		wakeword_desc   = hardware['wakeword']['description']
 		voices_dir      = os.path.join(_BASE_DIR, hardware['voice_directory'])
 		hardware_path   = hardware['_path']
+		html_config     = hardware.get('html', {})
 
 		# Initialize components
 		self.wakeword = WakeWord(model_path=wakeword_model, description=wakeword_desc)
@@ -114,7 +115,7 @@ class Kermit:
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir)
 		self.movements = Movement(hardware_path)
-		self.web_server = WebServer()
+		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
 		self.show_player = ShowPlayer(pygame)
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management, self.show_player)

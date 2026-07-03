@@ -14,6 +14,11 @@ log.setLevel(logging.ERROR)
 app = Flask(__name__, static_folder='webpage')
 app.config['SECRET_KEY'] = 'Monkey Island is an amusement park.'
 
+# Character-specific HTML values, injected into index.html at serve time.
+# Overridden via the "html" section of the hardware JSON (see WebServer.__init__).
+app.config['HTML_TITLE'] = 'Animatronic Controller'
+app.config['CSS_FILE']   = 'assets/css/kermit.css'
+
 # Use threading mode for async
 socketio = SocketIO(app, async_mode='threading', ping_timeout=30, logger=False, engineio_logger=False)
 
@@ -21,7 +26,13 @@ socketio = SocketIO(app, async_mode='threading', ping_timeout=30, logger=False, 
 class WebServer:
 	@app.route("/")
 	def index() -> Response:
-		return app.send_static_file('index.html')
+		"""Serve index.html with character-specific placeholders filled in."""
+		index_path = os.path.join(app.static_folder, 'index.html')
+		with open(index_path, 'r', encoding='utf-8') as f:
+			html = f.read()
+		html = html.replace('%%HTML_TITLE%%', app.config['HTML_TITLE'])
+		html = html.replace('%%CSS_FILE%%', app.config['CSS_FILE'])
+		return Response(html, mimetype='text/html')
 
 	def broadcast(self, signal_id: str, data: Any) -> None:
 		with app.app_context():
@@ -67,7 +78,22 @@ class WebServer:
 	def web_tts_submit(inputText: str) -> None:
 		dispatcher.send(signal="executeTTS", text=inputText)
 
-	def __init__(self) -> None:
+	def __init__(self, html_config: dict = None) -> None:
+		# Apply character-specific HTML settings from the hardware JSON.
+		# css_file in the JSON is a project-relative path (e.g. "webpage/assets/css/kermit.css"),
+		# but the browser needs it relative to the web root, so strip the "webpage/" prefix.
+		if html_config:
+			title = html_config.get('html_title', '').strip()
+			if title:
+				app.config['HTML_TITLE'] = title
+			css_file = html_config.get('css_file', '').strip()
+			if css_file:
+				prefix = app.static_folder.rsplit(os.sep, 1)[-1] + '/'
+				if css_file.startswith(prefix):
+					css_file = css_file[len(prefix):]
+				app.config['CSS_FILE'] = css_file
+			print(f"WebServer: html_title='{app.config['HTML_TITLE']}', css_file='{app.config['CSS_FILE']}'")
+
 		# Create a thread for HTTP server only
 		self.threads: list[threading.Thread] = []
 		http_thread = threading.Thread(target=self.run_http, daemon=True)
