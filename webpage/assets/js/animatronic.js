@@ -341,13 +341,28 @@ function populateTTSInput(text) {
 let wifiSSIDs = [];
 let selectedSSID = null;
 
-function updateWifiStatusLink(ssid, signal) {
-	const link = document.getElementById('wifiStatusLink');
-	if (!link) return;
+function signalToLevel(signal) {
+	// Map signal strength (0-100%) to icon level, Windows-style:
+	// 0 = disconnected, 1 = dot only, 2-4 = arcs lighting up
+	if (signal >= 75) return 4;
+	if (signal >= 50) return 3;
+	if (signal >= 25) return 2;
+	if (signal > 0)   return 1;
+	return 1; // connected but 0% reported — still show the dot
+}
+
+function updateWifiIndicator(ssid, signal) {
+	const indicator = document.getElementById('wifiIndicator');
+	const label = document.getElementById('wifiSSIDLabel');
+	if (!indicator || !label) return;
 	if (ssid) {
-		link.textContent = `${truncateString(ssid, 40)} (${signal}%)`;
+		indicator.dataset.level = signalToLevel(signal);
+		indicator.title = `${ssid} (${signal}%) — WiFi settings`;
+		label.textContent = truncateString(ssid, 28);
 	} else {
-		link.textContent = 'Not connected';
+		indicator.dataset.level = 0;
+		indicator.title = 'WiFi settings';
+		label.textContent = 'Not connected';
 	}
 }
 
@@ -356,11 +371,11 @@ socket.on('wifiScan', function(data) {
 });
 
 socket.on('wifiConnected', function(data) {
-	updateWifiStatusLink(data.ssid, data.signal);
+	updateWifiIndicator(data.ssid, data.signal);
 });
 
 socket.on('wifiDisconnected', function() {
-	updateWifiStatusLink(null, 0);
+	updateWifiIndicator(null, 0);
 });
 
 socket.on('wifiPasswordRequired', function(data) {
@@ -377,6 +392,16 @@ function setupWifiPopupEvents() {
 	const closePopupButton = document.getElementById('closeWifiPopup');
 	const connectButton = document.getElementById('connectWifiButton');
 	const popupOverlay = document.getElementById('wifiPopup');
+	const wifiIndicator = document.getElementById('wifiIndicator');
+
+	if (wifiIndicator) {
+		wifiIndicator.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openWifiPopup();
+			}
+		});
+	}
 
 	if (closePopupButton) {
 		closePopupButton.addEventListener('click', closeWifiPopup);

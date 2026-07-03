@@ -262,11 +262,86 @@ hr {
 #stopButton:active  { background-color: rgba(255, 107, 107, 0.3); }
 
 /* =========================================================
-   WiFi status
+   WiFi indicator (upper-left corner)
+   —————————————————————————————————————————————————————————
+   Configure the look here:
+     --wifi-icon-color    : color of the icon and network name
+     --wifi-icon-opacity  : overall opacity of the indicator
+     --wifi-dim-opacity   : opacity of unlit signal arcs
    ========================================================= */
-#wifi-card p {
-    font-size: 0.95em;
-    margin: 0;
+#wifiIndicator {
+    --wifi-icon-color: #ffffff;
+    --wifi-icon-opacity: 0.75;
+    --wifi-dim-opacity: 0.25;
+
+    position: fixed;
+    top: 0.75em;
+    left: 0.75em;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 0.45em;
+    color: var(--wifi-icon-color);
+    opacity: var(--wifi-icon-opacity);
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.2s ease;
+}
+
+#wifiIndicator:hover,
+#wifiIndicator:focus-visible {
+    opacity: 1;
+}
+
+#wifiSSIDLabel {
+    font-size: 0.8em;
+    line-height: 1;
+    white-space: nowrap;
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Icon parts: arcs are strokes, the dot is a fill. Everything inherits
+   --wifi-icon-color; arcs dim until lit by the current signal level. */
+#wifiIcon .wifi-arc {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    opacity: var(--wifi-dim-opacity);
+    transition: opacity 0.3s ease;
+}
+
+#wifiIcon .wifi-dot {
+    fill: currentColor;
+    opacity: var(--wifi-dim-opacity);
+    transition: opacity 0.3s ease;
+}
+
+/* data-level (set by JS from signal strength):
+   0 = disconnected, 1 = dot only, 2 = +inner arc,
+   3 = +middle arc, 4 = all arcs */
+#wifiIndicator[data-level="1"] .wifi-dot,
+#wifiIndicator[data-level="2"] .wifi-dot,
+#wifiIndicator[data-level="3"] .wifi-dot,
+#wifiIndicator[data-level="4"] .wifi-dot {
+    opacity: 1;
+}
+
+#wifiIndicator[data-level="2"] .wifi-arc-1,
+#wifiIndicator[data-level="3"] .wifi-arc-1,
+#wifiIndicator[data-level="4"] .wifi-arc-1 {
+    opacity: 1;
+}
+
+#wifiIndicator[data-level="3"] .wifi-arc-2,
+#wifiIndicator[data-level="4"] .wifi-arc-2 {
+    opacity: 1;
+}
+
+#wifiIndicator[data-level="4"] .wifi-arc-3 {
+    opacity: 1;
 }
 
 /* =========================================================

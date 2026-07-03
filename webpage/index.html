@@ -13,6 +13,18 @@
     </head>
     <body id="top">
 
+        <!-- WiFi indicator (upper-left corner) -->
+        <div id="wifiIndicator" data-level="0" role="button" tabindex="0" title="WiFi settings"
+             onclick="openWifiPopup(); return false;">
+            <svg id="wifiIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path class="wifi-arc wifi-arc-3" d="M 2.2 9.6 a 13.8 13.8 0 0 1 19.6 0" />
+                <path class="wifi-arc wifi-arc-2" d="M 5.4 12.9 a 9.3 9.3 0 0 1 13.2 0" />
+                <path class="wifi-arc wifi-arc-1" d="M 8.6 16.2 a 4.8 4.8 0 0 1 6.8 0" />
+                <circle class="wifi-dot" cx="12" cy="19.3" r="1.7" />
+            </svg>
+            <span id="wifiSSIDLabel">Not connected</span>
+        </div>
+
         <section id="banner"></section>
 
         <!-- Main -->
@@ -23,7 +35,7 @@
                 <div class="card" id="status-card">
                     <p id="voiceCommandStatus">Voice Command Status: <span>---</span></p>
                     <div id="ttsInputContainer">
-                        <input type="text" id="ttsInput" placeholder="Type something to make the animatronic say…" />
+                        <input type="text" id="ttsInput" placeholder="Type something to say…" />
                         <button id="submitTTSButton" type="button">Speak</button>
                     </div>
                 </div>
@@ -46,11 +58,6 @@
                             </button>
                         </div>
                     </div>
-                </div>
-
-                <!-- WiFi Status -->
-                <div class="card" id="wifi-card">
-                    <p id="wifiStatus">WiFi: <a href="#" id="wifiStatusLink" onclick="openWifiPopup(); return false;">---</a></p>
                 </div>
 
                 <!-- Keypad + Mirrored Mode -->
