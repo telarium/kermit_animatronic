@@ -53,7 +53,10 @@ class LLM:
 		self.openai_key       = config.get("ChatGPT",   "OpenAIKey",      fallback="").strip()
 		self.deepseek_api_key = config.get("DeepSeek",  "DeepSeekAPIKey", fallback="").strip()
 		self.deepseek_model   = config.get("DeepSeek",  "DeepSeekModel",  fallback="deepseek-chat").strip()
-		self.llm_context      = config.get("DeepSeek",  "LLMContext",     fallback="").strip().strip('"')
+		self.llm_context      = config.get("LLM",       "LLMContext",     fallback="").strip()
+		if not self.llm_context:
+			# Backward compat: LLMContext used to live under [DeepSeek].
+			self.llm_context = config.get("DeepSeek", "LLMContext", fallback="").strip()
 
 	def send(self, query: str) -> None:
 		"""Send a query to the LLM asynchronously so we never block the main thread."""
