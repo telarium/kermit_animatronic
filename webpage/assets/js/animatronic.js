@@ -90,6 +90,35 @@ function updateStatus(id, value) {
 
 socket.on('statusUpdate', ({ id, value }) => updateStatus(id, value));
 
+// Full config from config.cfg as { section: { key: value } }.
+// Stored globally for later use — e.g. a settings panel.
+let animatronicConfig = {};
+
+socket.on('configLoaded', (data) => {
+	animatronicConfig = data || {};
+	console.log('Config loaded:', animatronicConfig);
+});
+
+/**
+ * Send config edits to the server, which writes them to config.cfg and
+ * re-applies them to the running system.
+ * @param {Object} updates - Partial config as { section: { key: value } },
+ *   e.g. saveConfig({ Wakeword: { Threshold: '0.4' } }).
+ *   Only the keys included are changed; everything else is left untouched.
+ */
+function saveConfig(updates) {
+	socket.emit('onConfigSave', updates);
+}
+
+socket.on('configSaveResult', (result) => {
+	if (result && result.success) {
+		console.log('Config saved.');
+	} else {
+		console.error('Config save failed:', result ? result.error : 'unknown error');
+	}
+	// TODO: surface this in the editor UI (toast / inline message).
+});
+
 // Handle show list loading
 let showList = [];
 socket.on('showListLoaded', (data) => {

@@ -49,6 +49,7 @@ import threading
 import ctypes
 import configparser
 import json
+import utils
 from pydispatch import dispatcher
 from web_io import WebServer
 from wakeword_detection import WakeWord
@@ -97,6 +98,7 @@ class Kermit:
 		self._prev_show_status: str = "stopped"
 		self._prev_status_id: str = ""
 		self._prev_status_value: any = None
+		self._config_data: dict = {}
 
 		# Load config to get hardware JSON path before initializing components
 		config_path = os.path.join(_BASE_DIR, "config.cfg")
@@ -144,6 +146,7 @@ class Kermit:
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
+		dispatcher.connect(self.on_config_save, signal='configSave', sender=dispatcher.Any)
 
 	def load_config(self, path: str = "") -> None:
 		if not path:
@@ -160,9 +163,52 @@ class Kermit:
 			self.llm.apply_config(path)
 			self.tts.apply_config(path)
 			self.wakeword.apply_config(path)
+			self._config_data = self._build_config_data(path)
+			self.web_server.broadcast('configLoaded', self._config_data)
 		else:
 			self.config_path = None
 			print(f"Warning: Config file not found at {path}. Continuing with no config.")
+
+	# Sections excluded from the web broadcast — WiFi already has its own
+	# dedicated UI (scan list + connect popup), so the editor doesn't need it.
+	BROADCAST_EXCLUDED_SECTIONS = ("wifi",)
+
+	def _build_config_data(self, path: str) -> dict:
+		"""Parse the config file into {section: {key: value}} for the web UI."""
+		return utils.build_config_data(path, self.BROADCAST_EXCLUDED_SECTIONS)
+
+	def on_config_save(self, updates: dict) -> None:
+		"""Handle config edits from the web UI: write to disk, re-apply,
+		and rebroadcast the config so all connected clients stay in sync."""
+		if not isinstance(updates, dict) or not updates:
+			self.web_server.broadcast('configSaveResult', {'success': False, 'error': 'No updates provided.'})
+			return
+		if not self.config_path:
+			self.web_server.broadcast('configSaveResult', {'success': False, 'error': 'No config file loaded.'})
+			return
+
+		try:
+			utils.write_config_values(self.config_path, updates)
+		except Exception as e:
+			# Most likely a read-only mount (USB stick) or permissions.
+			print(f"Config: save failed: {e}")
+			self.web_server.broadcast('configSaveResult', {'success': False, 'error': str(e)})
+			return
+
+		print(f"Config: saved {sum(len(v) for v in updates.values() if isinstance(v, dict))} value(s) to {self.config_path}")
+
+		# Re-apply to running components. WiFi is only re-applied when its
+		# section actually changed, since apply_config initiates a connection
+		# attempt — saving an unrelated setting shouldn't retrigger that.
+		self.llm.apply_config(self.config_path)
+		self.tts.apply_config(self.config_path)
+		self.wakeword.apply_config(self.config_path)
+		if any(section.strip().lower() == 'wifi' for section in updates):
+			self.wifi_management.apply_config(self.config_path)
+
+		self._config_data = self._build_config_data(self.config_path)
+		self.web_server.broadcast('configLoaded', self._config_data)
+		self.web_server.broadcast('configSaveResult', {'success': True})
 
 	def run(self) -> None:
 		try:
@@ -229,6 +275,7 @@ class Kermit:
 		self.show_player.get_show_list()
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
+		self.web_server.broadcast('configLoaded', self._config_data)
 		self.on_update_status(self._prev_status_id, self._prev_status_value)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:

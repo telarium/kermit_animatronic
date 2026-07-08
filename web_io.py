@@ -78,6 +78,11 @@ class WebServer:
 	def web_tts_submit(inputText: str) -> None:
 		dispatcher.send(signal="executeTTS", text=inputText)
 
+	@socketio.on('onConfigSave')
+	def config_save_event(updates: dict) -> None:
+		"""Receive config edits from the web UI as {section: {key: value}}."""
+		dispatcher.send(signal="configSave", updates=updates)
+
 	def __init__(self, html_config: dict = None) -> None:
 		# Apply character-specific HTML settings from the hardware JSON.
 		# css_file in the JSON is a project-relative path (e.g. "webpage/assets/css/kermit.css"),
