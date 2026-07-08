@@ -118,17 +118,23 @@ def transcode_to_mp3(audio_path: str) -> tuple[bytes, float]:
 
 def extract_audio_from_shw(shw_path: str) -> tuple[bytes, int]:
 	"""
-	Read a v5 .shw file and return (raw_audio_bytes, audio_size).
-	Raises ValueError if the file is not a recognised v5 format.
+	Read a .shw file (v5 or v2) and return (raw_audio_bytes, audio_size).
 	"""
 	with open(shw_path, 'rb') as f:
 		data = f.read()
 	m = re.match(rb'^(\d+)<dsfa>', data)
-	if not m:
-		raise ValueError(f"Not a v5 .shw file (no <dsfa> header): {shw_path}")
-	audio_size   = int(m.group(1))
-	audio_offset = m.end()
-	return data[audio_offset:audio_offset + audio_size], audio_size
+	if m:
+		# v5: plaintext audio after the size<dsfa> header
+		audio_size   = int(m.group(1))
+		audio_offset = m.end()
+		return data[audio_offset:audio_offset + audio_size], audio_size
+
+	# v2: entire file shifted +54; audio runs from start to <DSFROBOTSDATA>
+	decoded = bytes((b - 54) & 0xFF for b in data)
+	data_start = decoded.find(b"\r\n<DSFROBOTSDATA>\r\n")
+	if data_start == -1:
+		raise ValueError(f"Unknown .shw format: {shw_path}")
+	return decoded[:data_start], data_start
 
 
 def write_wav_from_shw(shw_path: str, out_wav: str) -> None:
@@ -375,39 +381,74 @@ def parse_midi_events(midi_path: str) -> list:
 	return events
 
 
-def write_midi(events: list, out_path: str, pb_to_midi: dict) -> None:
+def write_midi(events: list, out_path: str, pb_to_midi: dict,
+               channel_names: dict = None, groups: dict = None) -> None:
 	"""
 	Write [timestamp_ms, pb_channel, value] events to a MIDI file.
 
-	Each program_blue_channel gets its own MIDI channel (1-16, wrapping).
-	The midi_note for each channel comes from pb_to_midi.
+	If groups are provided (v2 files with a CTM section), each group of
+	ProgramBlue channels (a character, light bank, etc.) shares one MIDI
+	channel, with notes assigned sequentially within the group. Ungrouped
+	channels go to a shared "Misc" MIDI channel. Groups beyond 16 wrap and
+	share MIDI channels.
+
+	Without groups (v5 files), each pb_channel gets its own MIDI channel
+	(wrapping at 16) and its note from the JSON config.
+
 	Uses 120 BPM and MIDI_PPQ ticks per quarter note.
 	"""
+	channel_names = channel_names or {}
+	groups = groups or {}
+
 	midi_file = mido.MidiFile(type=1, ticks_per_beat=MIDI_PPQ)
 
-	# Tempo track
 	tempo_track = mido.MidiTrack()
 	tempo_track.append(mido.MetaMessage('set_tempo', tempo=MIDI_TEMPO, time=0))
 	tempo_track.append(mido.MetaMessage('end_of_track', time=0))
 	midi_file.tracks.append(tempo_track)
 
-	# Build one track per pb_channel that appears in the events
 	pb_channels_seen = sorted(set(e[1] for e in events))
 
-	# Assign MIDI channels (1-indexed, wrapping 1-16)
-	midi_channel_for = {
-		pb_ch: ((pb_ch - 1) % 16)  # mido uses 0-indexed channels internally
-		for pb_ch in pb_channels_seen
-	}
+	# Build pb_channel -> (midi_channel, note, track_name) assignment
+	assignment: dict = {}
+
+	if groups:
+		# Keep only groups that have events; preserve CTM order
+		active_groups = []
+		grouped_channels = set()
+		for gname, chans in groups.items():
+			present = [c for c in chans if c in set(pb_channels_seen)]
+			if present:
+				active_groups.append((gname, present))
+				grouped_channels.update(present)
+
+		misc = [c for c in pb_channels_seen if c not in grouped_channels]
+		if misc:
+			active_groups.append(("Misc", misc))
+
+		if len(active_groups) > 16:
+			print(f"Converter: {len(active_groups)} groups — wrapping onto 16 MIDI channels (some will share)")
+
+		for group_index, (gname, chans) in enumerate(active_groups):
+			midi_ch = group_index % 16
+			for note_index, pb_ch in enumerate(chans):
+				note = min(36 + note_index, 127)
+				label = channel_names.get(pb_ch, f"PB ch{pb_ch}")
+				assignment[pb_ch] = (midi_ch, note, f"{gname}: {label}")
+			print(f"Converter: group '{gname}' -> MIDI ch {midi_ch + 1} ({len(chans)} channels)")
+	else:
+		for pb_ch in pb_channels_seen:
+			midi_ch = (pb_ch - 1) % 16
+			note = pb_to_midi.get(pb_ch, 60)
+			assignment[pb_ch] = (midi_ch, note, f"PB ch{pb_ch}")
 
 	def ms_to_ticks(ms: float) -> int:
 		# 120 BPM: one beat = 500 ms, so ticks_per_ms = MIDI_PPQ / 500
 		return round(ms * MIDI_PPQ / 500.0)
 
 	for pb_ch in pb_channels_seen:
-		note       = pb_to_midi.get(pb_ch, 60)  # fallback to middle C
-		midi_ch    = midi_channel_for[pb_ch]
-		ch_events  = sorted(
+		midi_ch, note, track_name = assignment[pb_ch]
+		ch_events = sorted(
 			[(e[0], e[2]) for e in events if e[1] == pb_ch],
 			key=lambda x: x[0]
 		)
@@ -415,7 +456,7 @@ def write_midi(events: list, out_path: str, pb_to_midi: dict) -> None:
 		track = mido.MidiTrack()
 		track.append(mido.MetaMessage(
 			'track_name',
-			name=f"PB ch{pb_ch}",
+			name=track_name,
 			time=0,
 		))
 
@@ -487,6 +528,119 @@ def midi_and_audio_to_shw(midi_path: str, audio_path: str, out_shw: str, midi_to
 	print(f"Converter: .shw written to '{out_shw}'")
 
 
+def _parse_v2_events(data: bytes, default_fps: int) -> list:
+	"""
+	Parse v2 (DSFRobots) .shw data into [timestamp_ms, channel, value] events.
+	The whole file is additively shifted +54. The frame table is ASCII hex
+	lines of 256 chars (128 bytes); each byte packs two channels:
+	bit 4 -> odd channel (1,3,..), bit 0 -> even channel (2,4,..).
+	"""
+	decoded = bytes((b - 54) & 0xFF for b in data)
+
+	data_marker = b"\r\n<DSFROBOTSDATA>\r\n"
+	data_start  = decoded.find(data_marker)
+	if data_start == -1:
+		raise ValueError("Unknown .shw format (no <dsfa> or <DSFROBOTSDATA>)")
+
+	body_start = data_start + len(data_marker)
+	body_end   = decoded.find(b"\r\n</DSFROBOTSDATA>", body_start)
+	if body_end == -1:
+		raise ValueError("Missing </DSFROBOTSDATA> marker")
+
+	# FPS from project settings if declared
+	fps_match = re.search(rb"\bFPS=(\d+)", decoded[body_end:])
+	fps = int(fps_match.group(1)) if fps_match else default_fps
+
+	def frame_to_ms(frame: int) -> int:
+		return round(frame * 1000.0 / fps)
+
+	events: list = []
+	prev = [0] * NUM_SHW_CHANNELS
+
+	frame_lines = decoded[body_start:body_end].splitlines()
+	for frame, line in enumerate(frame_lines):
+		if len(line) != 256:
+			continue
+		row = bytes.fromhex(line.decode("ascii"))
+		current = [0] * NUM_SHW_CHANNELS
+		for byte_index, value in enumerate(row):
+			current[byte_index * 2]     = 1 if value & 0x10 else 0
+			current[byte_index * 2 + 1] = 1 if value & 0x01 else 0
+		for ch_idx, value in enumerate(current):
+			if value != prev[ch_idx]:
+				events.append([frame_to_ms(frame), ch_idx + 1, value])
+		prev = current
+
+	print(f"Converter: parsed {len(events)} channel events (v2, fps={fps}, frames={len(frame_lines)})")
+	return events
+
+
+def get_shw_channel_groups(shw_path: str) -> tuple[dict, dict]:
+	"""
+	Extract channel names and group definitions from a v2 .shw CTM section.
+
+	Returns (channel_names, groups):
+		channel_names: { pb_channel -> "Pasqually Mouth", ... }
+		groups:        { "Pasqually" -> [29, 30, ...], "Dook" -> [...], ... }
+
+	Grouping rules:
+	- Channels with real names (not "Channel N") group by first word of name.
+	- Explicit group entries (257+) claim any channels not already grouped.
+	- Returns empty dicts for v5 files (no CTM section available).
+	"""
+	with open(shw_path, 'rb') as f:
+		data = f.read()
+
+	if re.match(rb'^(\d+)<dsfa>', data):
+		return {}, {}  # v5 — no channel metadata available
+
+	decoded = bytes((b - 54) & 0xFF for b in data)
+	start = decoded.find(b'<DSFROBOTSCTM>')
+	end   = decoded.find(b'</DSFROBOTSCTM>')
+	if start == -1 or end == -1:
+		return {}, {}
+
+	channel_names: dict = {}
+	groups: dict = {}
+	claimed: set = set()
+
+	explicit_entries = []
+
+	for line in decoded[start:end].decode('ascii', errors='replace').splitlines():
+		parts = line.split('=')
+		if len(parts) < 3:
+			continue
+		try:
+			num = int(parts[0])
+		except ValueError:
+			continue
+		name = parts[1].replace('^', ' ').strip()
+
+		if num <= 256:
+			if not name.startswith('Channel '):
+				channel_names[num] = name
+				prefix = name.split(' ')[0]
+				groups.setdefault(prefix, []).append(num)
+				claimed.add(num)
+		else:
+			explicit_entries.append((name, parts[2]))
+
+	# Explicit groups (257+) claim channels not already grouped by name prefix
+	for name, chan_list in explicit_entries:
+		chans = []
+		for tok in chan_list.split('-'):
+			tok = tok.strip()
+			if tok.isdigit():
+				ch = int(tok)
+				if ch not in claimed:
+					chans.append(ch)
+					claimed.add(ch)
+		if chans:
+			groups[name] = sorted(chans)
+
+	return channel_names, groups
+
+
 def parse_shw_events(shw_path: str, fps: int = SHW_FPS) -> list:
 	"""
 	Self-contained v5 .shw frame table parser.
@@ -511,7 +665,7 @@ def parse_shw_events(shw_path: str, fps: int = SHW_FPS) -> list:
 
 	m = re.match(rb'^(\d+)<dsfa>', data)
 	if not m:
-		raise ValueError(f"Not a v5 .shw file: {shw_path}")
+		return _parse_v2_events(data, fps)
 
 	audio_size   = int(m.group(1))
 	audio_offset = m.end()
@@ -569,10 +723,11 @@ def parse_shw_events(shw_path: str, fps: int = SHW_FPS) -> list:
 
 
 def shw_to_midi_and_audio(shw_path: str, out_midi: str, out_wav: str, pb_to_midi: dict) -> None:
-	"""Convert a v5 .shw file into a MIDI file and a .wav audio file."""
+	"""Convert a .shw file (v5 or v2) into a MIDI file and a .wav audio file."""
 	print(f"Converter: parsing '{shw_path}'")
 	shw_events = parse_shw_events(shw_path)
-	write_midi(shw_events, out_midi, pb_to_midi)
+	channel_names, groups = get_shw_channel_groups(shw_path)
+	write_midi(shw_events, out_midi, pb_to_midi, channel_names, groups)
 	write_wav_from_shw(shw_path, out_wav)
 
 
