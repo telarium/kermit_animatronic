@@ -345,6 +345,104 @@ hr {
 }
 
 /* =========================================================
+   Config editor indicator (upper-right) + popup
+   ========================================================= */
+#configIndicator {
+    position: fixed;
+    top: 0.75em;
+    right: 0.75em;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    color: #ffffff;
+    opacity: 0.75;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.2s ease;
+}
+
+#configIndicator:hover,
+#configIndicator:focus-visible {
+    opacity: 1;
+}
+
+#configIcon .config-gear {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.config-popup-content {
+    max-width: 520px;
+}
+
+.config-editor {
+    max-height: 60vh;
+    overflow-y: auto;
+    margin-bottom: 0.75em;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 0.75em;
+    background-color: #122e09;
+    text-align: left;
+}
+
+.config-section-title {
+    color: #fff;
+    font-weight: 600;
+    margin: 1.1em 0 0.5em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.config-editor .config-section-title:first-child {
+    margin-top: 0;
+}
+
+.config-field label {
+    color: rgba(255, 255, 255, 0.85);
+    display: block;
+    margin-bottom: 0.3em;
+    font-size: 0.85em;
+    font-weight: 400;
+}
+
+.config-field input,
+.config-field textarea {
+    width: 100%;
+    padding: 0.5em;
+    margin-bottom: 0.75em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    color: #000;
+    font-size: 0.9em;
+}
+
+.config-field textarea {
+    min-height: 130px;
+    resize: vertical;
+    font-family: inherit;
+    line-height: 1.4;
+}
+
+#configSaveStatus {
+    color: #fff;
+    min-height: 1.3em;
+    margin-bottom: 0.75em;
+    font-size: 0.9em;
+    text-align: center;
+}
+
+#configSaveStatus.success { color: #b9f6ca; }
+#configSaveStatus.error   { color: #ff8a80; }
+
+#saveConfigButton {
+    width: 100%;
+}
+
+/* =========================================================
    Keypad image
    ========================================================= */
 #keypad-card {
@@ -609,5 +707,8 @@ button:disabled,
     }
     .wifi-list {
         max-height: 150px;
+    }
+    .config-editor {
+        max-height: 50vh;
     }
 }
