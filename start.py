@@ -100,9 +100,16 @@ class Kermit:
 		self._prev_status_value: any = None
 		self._config_data: dict = {}
 
-		# Load config to get hardware JSON path before initializing components
-		config_path = os.path.join(_BASE_DIR, "config.cfg")
-		hardware = _load_hardware_config(config_path)
+		# Resolve which config to use (USB-first, bootstrapping from the
+		# template if needed) before anything reads it. The hardware JSON
+		# path comes from this file, so startup cannot proceed without one.
+		self.config_path = utils.resolve_config(
+			_BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
+		)
+		if not self.config_path:
+			print("Error: No usable config.cfg found and none could be created from config_template.cfg. Cannot proceed.", file=sys.stderr)
+			sys.exit(1)
+		hardware = _load_hardware_config(self.config_path)
 
 		wakeword_model  = os.path.join(_BASE_DIR, hardware['wakeword']['model'])
 		wakeword_desc   = hardware['wakeword']['description']
@@ -148,26 +155,29 @@ class Kermit:
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
 		dispatcher.connect(self.on_config_save, signal='configSave', sender=dispatcher.Any)
 
-	def load_config(self, path: str = "") -> None:
-		if not path:
-			usb_cfg = os.path.join(usb_monitor.USB_MOUNT_POINT, "config.cfg")
-			if os.path.exists(usb_cfg):
-				path = usb_cfg
-			else:
-				path = os.path.join(_BASE_DIR, "config.cfg")
-
-		if os.path.exists(path):
-			self.config_path = path
-			print(f"Config found at {path}")
-			self.wifi_management.apply_config(path)
-			self.llm.apply_config(path)
-			self.tts.apply_config(path)
-			self.wakeword.apply_config(path)
-			self._config_data = self._build_config_data(path)
-			self.web_server.broadcast('configLoaded', self._config_data)
-		else:
+	def load_config(self, path: str = "", apply_wifi: bool = True) -> None:
+		"""Resolve which config to use (USB first, then local, then bootstrap
+		from the template — see utils.resolve_config) and apply it. `path` is
+		an explicit USB config path from the usbConfigFound event. WiFi apply
+		can be skipped, since it initiates a connection attempt."""
+		resolved = utils.resolve_config(
+			_BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted(),
+			usb_config_path=path,
+		)
+		if not resolved:
 			self.config_path = None
-			print(f"Warning: Config file not found at {path}. Continuing with no config.")
+			print("Warning: No usable config found and none could be created. Continuing with no config.")
+			return
+
+		self.config_path = resolved
+		print(f"Config loaded from {resolved}")
+		if apply_wifi:
+			self.wifi_management.apply_config(resolved)
+		self.llm.apply_config(resolved)
+		self.tts.apply_config(resolved)
+		self.wakeword.apply_config(resolved)
+		self._config_data = self._build_config_data(resolved)
+		self.web_server.broadcast('configLoaded', self._config_data)
 
 	# Sections excluded from the web broadcast — WiFi already has its own
 	# dedicated UI (scan list + connect popup), so the editor doesn't need it.
@@ -197,18 +207,24 @@ class Kermit:
 
 		print(f"Config: saved {sum(len(v) for v in updates.values() if isinstance(v, dict))} value(s) to {self.config_path}")
 
-		# Re-apply to running components. WiFi is only re-applied when its
-		# section actually changed, since apply_config initiates a connection
-		# attempt — saving an unrelated setting shouldn't retrigger that.
-		self.llm.apply_config(self.config_path)
-		self.tts.apply_config(self.config_path)
-		self.wakeword.apply_config(self.config_path)
-		if any(section.strip().lower() == 'wifi' for section in updates):
-			self.wifi_management.apply_config(self.config_path)
+		# Mirror the saved config to the other location(s): local dir + USB.
+		sync_errors = utils.sync_config_copies(
+			self.config_path, _BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
+		)
+		for err in sync_errors:
+			print(f"Config: {err}")
 
-		self._config_data = self._build_config_data(self.config_path)
-		self.web_server.broadcast('configLoaded', self._config_data)
-		self.web_server.broadcast('configSaveResult', {'success': True})
+		# Reload: re-applies components and rebroadcasts configLoaded to all
+		# clients. WiFi apply is skipped unless its section actually changed,
+		# since it initiates a connection attempt (the web editor doesn't
+		# include WiFi, so normally it never does).
+		wifi_changed = any(section.strip().lower() == 'wifi' for section in updates)
+		self.load_config(apply_wifi=wifi_changed)
+
+		result = {'success': True}
+		if sync_errors:
+			result['warning'] = "Saved, but couldn't sync all copies: " + "; ".join(sync_errors)
+		self.web_server.broadcast('configSaveResult', result)
 
 	def run(self) -> None:
 		try:
