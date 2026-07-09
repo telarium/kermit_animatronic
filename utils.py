@@ -11,10 +11,148 @@ import re
 import configparser
 
 
+CONFIG_FILENAME = "config.cfg"
+TEMPLATE_FILENAME = "config_template.cfg"
+
+
 # Matches a "Key = value" line, capturing indent, key, separator, and value.
 _KEY_LINE_RE = re.compile(r'^(\s*)([^#;=\s][^=]*?)(\s*=\s*)(.*)$')
 # Matches a "[Section]" header line.
 _SECTION_RE = re.compile(r'^\s*\[(.+?)\]\s*$')
+
+
+def validate_config(path: str) -> tuple:
+	"""Check that a config file parses and has the minimum required content.
+	Returns (True, "") if usable, or (False, reason)."""
+	cfg = configparser.ConfigParser()
+	try:
+		read_ok = cfg.read(path)
+		if not read_ok:
+			return False, "file could not be read"
+	except Exception as e:
+		return False, str(e)
+	# [Hardware] config is the one entry startup cannot proceed without.
+	if not cfg.get("Hardware", "config", fallback="").strip():
+		return False, "missing 'config' entry under [Hardware]"
+	return True, ""
+
+
+def copy_file_if_different(src: str, dst: str) -> bool:
+	"""Copy src to dst atomically, but only if contents differ (spares
+	flash/USB writes and file mtimes). Returns True if a copy happened.
+	Raises OSError on failure."""
+	with open(src, 'rb') as f:
+		src_bytes = f.read()
+	try:
+		with open(dst, 'rb') as f:
+			if f.read() == src_bytes:
+				return False
+	except OSError:
+		pass  # dst missing or unreadable — proceed with the copy
+	tmp_path = dst + ".tmp"
+	with open(tmp_path, 'wb') as f:
+		f.write(src_bytes)
+	os.replace(tmp_path, dst)
+	return True
+
+
+def resolve_config(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_config_path: str = "") -> str:
+	"""Decide which config file to use, and keep the local/USB copies in sync.
+
+	Priority:
+	1. A valid config on the USB drive — used, and backed up to the local
+	   directory as a validated known-good copy.
+	2. A valid local config — used; if a USB drive is attached but has no
+	   config, the local one is copied onto it.
+	3. Neither — bootstrap a fresh config from config_template.cfg into the
+	   local directory and onto the USB drive (if attached).
+
+	usb_config_path allows the USB monitor to pass an explicitly discovered
+	.cfg path (which may not be named config.cfg). Returns the path to load,
+	or None if no config could be found or created."""
+	local_cfg = os.path.join(base_dir, CONFIG_FILENAME)
+	template = os.path.join(base_dir, TEMPLATE_FILENAME)
+	default_usb_cfg = os.path.join(usb_mount_point, CONFIG_FILENAME)
+	usb_cfg = usb_config_path or default_usb_cfg
+
+	# 1. Valid USB config wins; mirror it locally as a known-good backup.
+	if usb_mounted and os.path.exists(usb_cfg):
+		valid, err = validate_config(usb_cfg)
+		if valid:
+			try:
+				if copy_file_if_different(usb_cfg, local_cfg):
+					print(f"Config: backed up USB config to {local_cfg}")
+			except OSError as e:
+				print(f"Config: could not back up USB config locally: {e}")
+			return usb_cfg
+		print(f"Config: USB config '{usb_cfg}' is invalid ({err}); ignoring it.")
+
+	# 2. Valid local config; seed the USB drive if it has none.
+	if os.path.exists(local_cfg):
+		valid, err = validate_config(local_cfg)
+		if valid:
+			if usb_mounted and not os.path.exists(default_usb_cfg):
+				try:
+					copy_file_if_different(local_cfg, default_usb_cfg)
+					print(f"Config: copied local config to USB drive at {default_usb_cfg}")
+				except OSError as e:
+					print(f"Config: could not copy config to USB drive: {e}")
+			return local_cfg
+		print(f"Config: local config '{local_cfg}' is invalid ({err}).")
+		# Preserve the broken file for inspection before the template replaces it.
+		try:
+			os.replace(local_cfg, local_cfg + ".invalid")
+			print(f"Config: moved invalid config to {local_cfg}.invalid")
+		except OSError as e:
+			print(f"Config: could not move invalid config aside: {e}")
+
+	# 3. Bootstrap fresh configs from the template.
+	if not os.path.exists(template):
+		print(f"Config: template '{template}' not found; cannot create a config.")
+		return None
+	result = None
+	try:
+		copy_file_if_different(template, local_cfg)
+		print(f"Config: created {local_cfg} from template.")
+		result = local_cfg
+	except OSError as e:
+		print(f"Config: could not create local config from template: {e}")
+	if usb_mounted and not os.path.exists(default_usb_cfg):
+		try:
+			copy_file_if_different(template, default_usb_cfg)
+			print(f"Config: created {default_usb_cfg} from template.")
+			if result is None:
+				result = default_usb_cfg
+		except OSError as e:
+			print(f"Config: could not create USB config from template: {e}")
+	return result
+
+
+def sync_config_copies(active_path: str, base_dir: str, usb_mount_point: str, usb_mounted: bool) -> list:
+	"""Mirror the active config file to the other standard location(s):
+	the local directory, and the USB drive if attached. Used after a save
+	so both copies stay identical. Returns a list of error strings."""
+	errors = []
+	active_abs = os.path.abspath(active_path)
+	targets = []
+
+	local_cfg = os.path.join(base_dir, CONFIG_FILENAME)
+	if active_abs != os.path.abspath(local_cfg):
+		targets.append(local_cfg)
+
+	if usb_mounted:
+		usb_root = os.path.abspath(usb_mount_point) + os.sep
+		# If the active config already lives on the USB drive (possibly under
+		# another filename), don't write a second copy next to it.
+		if not active_abs.startswith(usb_root):
+			targets.append(os.path.join(usb_mount_point, CONFIG_FILENAME))
+
+	for dst in targets:
+		try:
+			copy_file_if_different(active_path, dst)
+		except OSError as e:
+			errors.append(f"could not copy config to {dst}: {e}")
+	return errors
 
 
 def build_config_data(path: str, excluded_sections: tuple = ()) -> dict:
