@@ -25,6 +25,15 @@
             <span id="wifiSSIDLabel">Not connected</span>
         </div>
 
+        <!-- Config editor indicator (upper-right corner) -->
+        <div id="configIndicator" role="button" tabindex="0" title="Configuration"
+             onclick="openConfigPopup(); return false;">
+            <svg id="configIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <circle class="config-gear" cx="12" cy="12" r="3.2" />
+                <path class="config-gear" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+        </div>
+
         <section id="banner"></section>
 
         <!-- Main -->
@@ -88,6 +97,19 @@
                     <input type="password" id="wifiPassword" placeholder="Enter WiFi password" />
                     <button id="connectWifiButton">Connect</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Config Editor Popup -->
+        <div id="configPopup" class="popup-overlay" style="display: none;">
+            <div class="popup-content config-popup-content">
+                <button id="closeConfigPopup" class="close-button">&times;</button>
+                <h2>Configuration</h2>
+                <div id="configEditor" class="config-editor">
+                    <!-- Config fields are populated dynamically from the loaded config -->
+                </div>
+                <div id="configSaveStatus" aria-live="polite"></div>
+                <button id="saveConfigButton" type="button">Save</button>
             </div>
         </div>
 
