@@ -242,3 +242,5 @@ lib/pl2303/src/modules.order
 # Kermit - f_midi kernel module (pre-built binary, no source)
 !lib/f_midi/
 !lib/f_midi/usb_f_midi.ko
+
+config.cfg
