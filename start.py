@@ -180,8 +180,9 @@ class Kermit:
 		self.web_server.broadcast('configLoaded', self._config_data)
 
 	# Sections excluded from the web broadcast — WiFi already has its own
-	# dedicated UI (scan list + connect popup), so the editor doesn't need it.
-	BROADCAST_EXCLUDED_SECTIONS = ("wifi",)
+	# dedicated UI (scan list + connect popup), and Hardware (the character
+	# JSON path) isn't something to edit from the web page.
+	BROADCAST_EXCLUDED_SECTIONS = ("wifi", "hardware")
 
 	def _build_config_data(self, path: str) -> dict:
 		"""Parse the config file into {section: {key: value}} for the web UI."""
