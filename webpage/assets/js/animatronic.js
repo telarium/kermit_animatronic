@@ -35,6 +35,7 @@ function isMobileDevice() {
 document.addEventListener('DOMContentLoaded', () => {
 	handleMobileKeypadVisibility();
 	setupWifiPopupEvents();
+	setupConfigPopupEvents();
 	setupModeCheckboxes();
 	setupSubmitTTS();
 	setupShowControlButtons();
@@ -90,21 +91,35 @@ function updateStatus(id, value) {
 
 socket.on('statusUpdate', ({ id, value }) => updateStatus(id, value));
 
-// Full config from config.cfg as { section: { key: value } }.
-// Stored globally for later use — e.g. a settings panel.
+// -------------------------------------------------------------------------
+// Config editor
+// -------------------------------------------------------------------------
+
+// Full config from config.cfg as { section: { key: value } }, as loaded by
+// the server (WiFi is excluded server-side — it has its own popup).
 let animatronicConfig = {};
+
+// LLMContext lives in the [LLM] section but is shown at the top of the
+// editor under the friendlier label "AI Context".
+const AI_CONTEXT_SECTION = 'LLM';
+const AI_CONTEXT_KEY = 'LLMContext';
 
 socket.on('configLoaded', (data) => {
 	animatronicConfig = data || {};
 	console.log('Config loaded:', animatronicConfig);
+	// Only (re)render when the editor isn't open, so a broadcast from
+	// another client can't stomp on fields being edited here.
+	const popup = document.getElementById('configPopup');
+	if (popup && popup.style.display !== 'none' && popup.style.display !== '') {
+		return;
+	}
+	buildConfigEditor();
 });
 
 /**
- * Send config edits to the server, which writes them to config.cfg and
- * re-applies them to the running system.
- * @param {Object} updates - Partial config as { section: { key: value } },
- *   e.g. saveConfig({ Wakeword: { Threshold: '0.4' } }).
- *   Only the keys included are changed; everything else is left untouched.
+ * Send config edits to the server, which writes them to config.cfg (local
+ * and USB copies), re-applies them to the running system, and rebroadcasts.
+ * @param {Object} updates - Partial config as { section: { key: value } }.
  */
 function saveConfig(updates) {
 	socket.emit('onConfigSave', updates);
@@ -112,12 +127,183 @@ function saveConfig(updates) {
 
 socket.on('configSaveResult', (result) => {
 	if (result && result.success) {
-		console.log('Config saved.');
+		console.log('Config saved.', result.warning || '');
+		setConfigSaveStatus(result.warning ? result.warning : 'Saved!', 'success');
 	} else {
-		console.error('Config save failed:', result ? result.error : 'unknown error');
+		const error = result ? result.error : 'unknown error';
+		console.error('Config save failed:', error);
+		setConfigSaveStatus(`Save failed: ${error}`, 'error');
 	}
-	// TODO: surface this in the editor UI (toast / inline message).
 });
+
+function setConfigSaveStatus(message, cls) {
+	const status = document.getElementById('configSaveStatus');
+	if (!status) return;
+	status.textContent = message;
+	status.className = cls || '';
+}
+
+/**
+ * Rebuild the editor form from animatronicConfig. AI Context (LLMContext)
+ * is pinned to the top as a textarea; every other section follows in
+ * config-file order with one text input per key.
+ */
+function buildConfigEditor() {
+	const container = document.getElementById('configEditor');
+	if (!container) return;
+	container.innerHTML = '';
+
+	const sections = Object.keys(animatronicConfig);
+	if (sections.length === 0) {
+		container.innerHTML = '<p style="color: #fff; text-align: center;">No config loaded yet.</p>';
+		return;
+	}
+
+	// AI Context on top
+	const llmSection = animatronicConfig[AI_CONTEXT_SECTION];
+	if (llmSection && AI_CONTEXT_KEY in llmSection) {
+		appendConfigSectionTitle(container, 'AI Context');
+		appendConfigField(container, AI_CONTEXT_SECTION, AI_CONTEXT_KEY, llmSection[AI_CONTEXT_KEY], {
+			textarea: true,
+			label: null, // section title already says it
+		});
+	}
+
+	// Everything else, in the order the server sent it
+	sections.forEach(section => {
+		const keys = Object.keys(animatronicConfig[section]).filter(
+			key => !(section === AI_CONTEXT_SECTION && key === AI_CONTEXT_KEY)
+		);
+		if (keys.length === 0) return;
+
+		appendConfigSectionTitle(container, section);
+		keys.forEach(key => {
+			appendConfigField(container, section, key, animatronicConfig[section][key], {});
+		});
+	});
+}
+
+function appendConfigSectionTitle(container, title) {
+	const el = document.createElement('div');
+	el.classList.add('config-section-title');
+	el.textContent = title;
+	container.appendChild(el);
+}
+
+function appendConfigField(container, section, key, value, { textarea = false, label = key } = {}) {
+	const field = document.createElement('div');
+	field.classList.add('config-field');
+
+	const inputId = `config-${section}-${key}`;
+	if (label) {
+		const labelEl = document.createElement('label');
+		labelEl.setAttribute('for', inputId);
+		labelEl.textContent = label;
+		field.appendChild(labelEl);
+	}
+
+	const input = document.createElement(textarea ? 'textarea' : 'input');
+	if (!textarea) input.type = 'text';
+	input.id = inputId;
+	input.value = value;
+	input.dataset.configSection = section;
+	input.dataset.configKey = key;
+	input.setAttribute('autocomplete', 'off');
+	field.appendChild(input);
+
+	container.appendChild(field);
+}
+
+/**
+ * Collect edited fields (compared against the last loaded config) and send
+ * only the changes to the server.
+ */
+function submitConfigSave() {
+	const fields = document.querySelectorAll('#configEditor [data-config-section]');
+	const updates = {};
+	let changedCount = 0;
+
+	fields.forEach(el => {
+		const section = el.dataset.configSection;
+		const key = el.dataset.configKey;
+		const original = (animatronicConfig[section] || {})[key] ?? '';
+		// Config values are single INI lines: fold any newlines into spaces.
+		const value = el.value.replace(/[\r\n]+/g, ' ').trim();
+
+		if (value !== original) {
+			if (!updates[section]) updates[section] = {};
+			updates[section][key] = value;
+			changedCount++;
+		}
+	});
+
+	if (changedCount === 0) {
+		setConfigSaveStatus('No changes to save.', '');
+		return;
+	}
+
+	setConfigSaveStatus('Saving…', '');
+	console.log('Saving config changes:', updates);
+	saveConfig(updates);
+}
+
+function openConfigPopup() {
+	buildConfigEditor();
+	setConfigSaveStatus('', '');
+	const popup = document.getElementById('configPopup');
+	if (popup) {
+		popup.style.display = 'flex';
+	} else {
+		console.warn('Config Popup element not found!');
+	}
+}
+
+function closeConfigPopup() {
+	const popup = document.getElementById('configPopup');
+	if (popup) {
+		popup.style.display = 'none';
+	} else {
+		console.warn('Config Popup element not found!');
+	}
+}
+
+function setupConfigPopupEvents() {
+	const indicator = document.getElementById('configIndicator');
+	const closeButton = document.getElementById('closeConfigPopup');
+	const saveButton = document.getElementById('saveConfigButton');
+	const popupOverlay = document.getElementById('configPopup');
+
+	if (indicator) {
+		indicator.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openConfigPopup();
+			}
+		});
+	}
+
+	if (closeButton) {
+		closeButton.addEventListener('click', closeConfigPopup);
+	} else {
+		console.warn('Close Config Popup button not found!');
+	}
+
+	if (saveButton) {
+		saveButton.addEventListener('click', submitConfigSave);
+	} else {
+		console.warn('Save Config Button not found!');
+	}
+
+	if (popupOverlay) {
+		popupOverlay.addEventListener('click', (e) => {
+			if (e.target === popupOverlay) {
+				closeConfigPopup();
+			}
+		});
+	} else {
+		console.warn('Config Popup overlay not found!');
+	}
+}
 
 // Handle show list loading
 let showList = [];
@@ -227,8 +413,17 @@ function sendKey(key, value) {
 // Handle keyboard events
 const down = new Set();
 
+/**
+ * True if the event originates from a form field (TTS input, WiFi password,
+ * config editor fields, …). Typing there must never trigger movements.
+ */
+function isTypingTarget(event) {
+	const tag = event.target.tagName;
+	return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
 function doKeyDown(event) {
-	if (event.target.id === 'ttsInput' || event.target.id === 'wifiPassword') {
+	if (isTypingTarget(event)) {
 		return;
 	}
 
@@ -240,7 +435,7 @@ function doKeyDown(event) {
 }
 
 function doKeyUp(event) {
-	if (event.target.id === 'ttsInput' || event.target.id === 'wifiPassword') {
+	if (isTypingTarget(event)) {
 		return;
 	}
 
