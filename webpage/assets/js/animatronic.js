@@ -33,7 +33,6 @@ function isMobileDevice() {
 
 // Consolidated DOMContentLoaded Event Listener
 document.addEventListener('DOMContentLoaded', () => {
-	handleMobileKeypadVisibility();
 	setupWifiPopupEvents();
 	setupConfigPopupEvents();
 	setupModeCheckboxes();
@@ -41,20 +40,6 @@ document.addEventListener('DOMContentLoaded', () => {
 	setupShowControlButtons();
 	setupPasswordEnterKey();
 });
-
-// Handle visibility of keypad images on mobile devices
-function handleMobileKeypadVisibility() {
-	if (!isMobileDevice()) return;
-
-	const keypadImages = ['images/keypad-l.png'];
-	keypadImages.forEach(src => {
-		const img = document.querySelector(`img[src="${src}"]`);
-		if (img) {
-			const container = img.closest('.box');
-			if (container) container.style.display = 'none';
-		}
-	});
-}
 
 /**
  * Update the voice command status displayed on the page.
@@ -402,12 +387,187 @@ function setupShowControlButtons() {
 	}
 }
 
+// -------------------------------------------------------------------------
+// Movement keypad grid
+// -------------------------------------------------------------------------
+
+// Movement descriptors from the character config, broadcast by the server on
+// connect as [{ key, gamepad_buttons, description }]. Keys not in knownKeys
+// are ignored by sendKey, so we never emit presses the animatronic can't use.
+let keyMap = [];
+const knownKeys = new Set();
+const keyCells = new Map();   // lowercased key -> grid cell element
+
+// Physical keyboard rows, each left-to-right. Movements are grouped by the row
+// their key lives on, so keys from different keyboard rows never share a row in
+// the grid.
+const KEYBOARD_ROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+function keyPosition(key) {
+	const k = String(key).toLowerCase();
+	for (let row = 0; row < KEYBOARD_ROWS.length; row++) {
+		const col = KEYBOARD_ROWS[row].indexOf(k);
+		if (col !== -1) {
+			return { row, col };
+		}
+	}
+	// Unknown keys land in a trailing row, ordered by char code.
+	return { row: KEYBOARD_ROWS.length, col: k.charCodeAt(0) || 0 };
+}
+
+socket.on('keyMapLoaded', (data) => {
+	keyMap = Array.isArray(data) ? data : [];
+	console.log('Key map loaded:', keyMap);
+	buildKeyGrid();
+});
+
+// A movement fired (or released) on the device, from any source — keyboard,
+// gamepad, MIDI, or show playback. Tint that key's description while it's
+// active; the keycap invert stays tied to local key/pointer presses.
+socket.on('movementKeyActivated', ({ key, on }) => {
+	const cell = keyCells.get(String(key).toLowerCase());
+	if (cell) {
+		cell.classList.toggle('movement-on', !!on);
+	}
+});
+
+/**
+ * Build an SVG keycap resembling a physical keyboard key, with the given
+ * label centered on its face. Colors are deliberately left to the CSS
+ * (.keycap-* classes) so both the default look and the inverted/highlighted
+ * look are fully themeable.
+ * @param {string} label - Text to show on the key (e.g. "S").
+ * @returns {string} - SVG markup.
+ */
+function buildKeycapSVG(label) {
+	return `
+		<svg class="keycap-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+			<rect class="keycap-body" x="5" y="5" width="90" height="90" rx="16" ry="16" />
+			<rect class="keycap-face" x="15" y="12" width="70" height="63" rx="12" ry="12" />
+			<line class="keycap-detail" x1="16" y1="90" x2="24" y2="82" />
+			<line class="keycap-detail" x1="84" y1="90" x2="76" y2="82" />
+			<text class="keycap-letter" x="50" y="44" text-anchor="middle" dominant-baseline="central">${label}</text>
+		</svg>`;
+}
+
+/**
+ * (Re)build the keypad grid from keyMap. Movements are grouped by their
+ * physical keyboard row (top-to-bottom); within a row they're ordered
+ * left-to-right. Each keyboard row becomes its own centered row of keys, so
+ * keys from different keyboard rows never share a row here.
+ */
+function buildKeyGrid() {
+	const grid = document.getElementById('keyGrid');
+	if (!grid) {
+		console.warn('Key grid container not found!');
+		return;
+	}
+
+	grid.innerHTML = '';
+	knownKeys.clear();
+	keyCells.clear();
+
+	// Bucket movements by keyboard-row index.
+	const rows = new Map();   // rowIndex -> [{ key, description, col }]
+	keyMap.filter(m => m && m.key).forEach(m => {
+		const key = String(m.key).toLowerCase();
+		const pos = keyPosition(key);
+		if (!rows.has(pos.row)) {
+			rows.set(pos.row, []);
+		}
+		rows.get(pos.row).push({ key, description: m.description || '', col: pos.col });
+	});
+
+	// Emit rows top-to-bottom, keys left-to-right within each.
+	[...rows.keys()].sort((a, b) => a - b).forEach(rowIndex => {
+		const rowEl = document.createElement('div');
+		rowEl.className = 'key-row';
+
+		rows.get(rowIndex).sort((a, b) => a.col - b.col).forEach(item => {
+			knownKeys.add(item.key);
+
+			const cell = document.createElement('div');
+			cell.className = 'key-cell';
+			cell.dataset.key = item.key;
+			cell.setAttribute('role', 'button');
+			cell.setAttribute('tabindex', '0');
+			cell.setAttribute('aria-pressed', 'false');
+			if (item.description) {
+				cell.title = item.description;
+			}
+
+			// SVG keycap, then the description label below it. The description
+			// is set via textContent so config text can never inject markup.
+			cell.innerHTML = buildKeycapSVG(item.key.toUpperCase());
+			const desc = document.createElement('span');
+			desc.className = 'key-desc';
+			desc.textContent = item.description;
+			cell.appendChild(desc);
+
+			// Pointer (mouse/touch/pen) drives the movement like a momentary key.
+			cell.addEventListener('pointerdown', (e) => {
+				e.preventDefault();
+				pressPointerKey(item.key);
+			});
+
+			keyCells.set(item.key, cell);
+			rowEl.appendChild(cell);
+		});
+
+		grid.appendChild(rowEl);
+	});
+}
+
+/**
+ * Toggle the inverted highlight on the keycap for a given key, if present.
+ * @param {string} key
+ * @param {boolean} pressed
+ */
+function highlightKey(key, pressed) {
+	const cell = keyCells.get(String(key).toLowerCase());
+	if (cell) {
+		cell.classList.toggle('active', pressed);
+		cell.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+	}
+}
+
+// Track the key currently held via pointer so we can release it on a pointerup
+// anywhere on the page (even if the pointer drifts off the key beforehand).
+let pointerHeldKey = null;
+
+function pressPointerKey(key) {
+	if (pointerHeldKey !== null) {
+		releasePointerKey();
+	}
+	pointerHeldKey = key;
+	sendKey(key, 1);
+	highlightKey(key, true);
+}
+
+function releasePointerKey() {
+	if (pointerHeldKey === null) {
+		return;
+	}
+	sendKey(pointerHeldKey, 0);
+	highlightKey(pointerHeldKey, false);
+	pointerHeldKey = null;
+}
+
+document.addEventListener('pointerup', releasePointerKey);
+document.addEventListener('pointercancel', releasePointerKey);
+
 // Simplified key press handling
 function sendKey(key, value) {
-	if (bInvertHeadNod && key.toLowerCase() === 's') {
+	const k = key.toLowerCase();
+	// Only emit for keys that map to a movement in the loaded character
+	// config — presses for any other key are ignored.
+	if (!knownKeys.has(k)) {
+		return;
+	}
+	if (bInvertHeadNod && k === 's') {
 		value = 1 - value;
 	}
-	socket.emit('onKeyPress', { keyVal: key.toLowerCase(), val: value });
+	socket.emit('onKeyPress', { keyVal: k, val: value });
 }
 
 // Handle keyboard events
@@ -429,7 +589,9 @@ function doKeyDown(event) {
 
 	const charCode = event.which || event.keyCode;
 	if (!down.has(charCode)) {
-		sendKey(String.fromCharCode(charCode), 1);
+		const key = String.fromCharCode(charCode);
+		sendKey(key, 1);
+		highlightKey(key, true);
 		down.add(charCode);
 	}
 }
@@ -441,7 +603,9 @@ function doKeyUp(event) {
 
 	const charCode = event.which || event.keyCode;
 	if (down.has(charCode)) {
-		sendKey(String.fromCharCode(charCode), 0);
+		const key = String.fromCharCode(charCode);
+		sendKey(key, 0);
+		highlightKey(key, false);
 		down.delete(charCode);
 	}
 }

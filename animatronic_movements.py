@@ -135,9 +135,11 @@ class Movement:
 				if val == 1 and not movement.key_is_pressed:
 					movement.key_is_pressed = True
 					b_do_callback = True
+					dispatcher.send(signal="onMovementKeyActivated", key=movement.key, on=True)
 				elif val == 0 and movement.key_is_pressed:
 					movement.key_is_pressed = False
 					b_do_callback = True
+					dispatcher.send(signal="onMovementKeyActivated", key=movement.key, on=False)
 				if b_do_callback:
 					if not b_mute_output:
 						self.midi.send_message(movement.midi_note, val)

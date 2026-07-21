@@ -95,7 +95,7 @@
 			}
 		},
 		{
-			"description": "Body Turn Left",
+			"description": "Body Turn L",
 			"key": "z",
 			"key_mirror": "c",
 			"gamepad_buttons": ["RIGHT_STICK_LEFT", "BTN_WEST"],
@@ -107,7 +107,7 @@
 			}
 		},
 		{
-			"description": "Body Turn Right",
+			"description": "Body Turn R",
 			"key": "c",
 			"key_mirror": "z",
 			"gamepad_buttons": ["RIGHT_STICK_RIGHT", "BTN_EAST"],

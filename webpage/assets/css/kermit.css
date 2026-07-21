@@ -443,19 +443,106 @@ hr {
 }
 
 /* =========================================================
-   Keypad image
+   Movement key grid
    ========================================================= */
 #keypad-card {
     padding: 1em;
 }
 
-.keypad-img {
+.key-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;      /* center the whole block in the pane */
+    gap: 0.6em;
+    width: 100%;
+}
+
+.key-row {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;  /* center each keyboard row's keys */
+    align-items: flex-start;
+    flex-wrap: wrap;          /* a very long keyboard row still wraps, but never mixes with another row */
+    gap: 0.6em;
+    width: 100%;
+}
+
+.key-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3em;
+    width: 52px;              /* sized to the keycap; rows stay centered in the pane */
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    /* Let a press drive the key instead of scrolling/zooming the page. */
+    touch-action: none;
+}
+
+.key-cell:focus-visible {
+    outline: 2px solid #7fff3a;
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+.keycap-svg {
     display: block;
     width: 100%;
-    max-width: 275px;
+    max-width: 52px;
     height: auto;
-    margin: 0 auto;
-    border-radius: 4px;
+}
+
+/* Default look: faint white outlines (80% transparent) + solid white letter. */
+.keycap-body,
+.keycap-face {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.2);
+    stroke-width: 2.5;
+}
+
+.keycap-detail {
+    stroke: rgba(255, 255, 255, 0.2);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+}
+
+.keycap-letter {
+    fill: #fff;
+    font-family: sans-serif;
+    font-size: 34px;
+    font-weight: 700;
+}
+
+/* Highlighted / pressed: inverted and fully opaque — white cap, dark markings. */
+.key-cell.active .keycap-body,
+.key-cell.active .keycap-face {
+    fill: #fff;
+    stroke: #0d2b06;
+}
+
+.key-cell.active .keycap-detail {
+    stroke: #0d2b06;
+}
+
+.key-cell.active .keycap-letter {
+    fill: #0d2b06;
+}
+
+.key-desc {
+    font-size: 0.7em;
+    font-weight: 600;
+    line-height: 1.15;
+    text-align: center;
+    color: #fff;
+    word-break: break-word;
+}
+
+/* While the movement is active (server-confirmed), tint its description the
+   same green as the voice command status highlight. */
+.key-cell.movement-on .key-desc {
+    color: #7fff3a;
 }
 
 /* =========================================================

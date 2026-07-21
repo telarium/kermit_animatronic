@@ -99,6 +99,7 @@ class Kermit:
 		self._prev_status_id: str = ""
 		self._prev_status_value: any = None
 		self._config_data: dict = {}
+		self._key_map: list = []
 
 		# Resolve which config to use (USB-first, bootstrapping from the
 		# template if needed) before anything reads it. The hardware JSON
@@ -110,6 +111,7 @@ class Kermit:
 			print("Error: No usable config.cfg found and none could be created from config_template.cfg. Cannot proceed.", file=sys.stderr)
 			sys.exit(1)
 		hardware = _load_hardware_config(self.config_path)
+		self._key_map = self._build_key_map(hardware)
 
 		wakeword_model  = os.path.join(_BASE_DIR, hardware['wakeword']['model'])
 		wakeword_desc   = hardware['wakeword']['description']
@@ -141,6 +143,7 @@ class Kermit:
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
+		dispatcher.connect(self.on_movement_key_activated, signal='onMovementKeyActivated', sender=dispatcher.Any)
 		dispatcher.connect(self.load_config, signal='usbConfigFound', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wakeword_event, signal='wakewordEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_transcription_result, signal='transcriptionResult', sender=dispatcher.Any)
@@ -187,6 +190,23 @@ class Kermit:
 	def _build_config_data(self, path: str) -> dict:
 		"""Parse the config file into {section: {key: value}} for the web UI."""
 		return utils.build_config_data(path, self.BROADCAST_EXCLUDED_SECTIONS)
+
+	def _build_key_map(self, hardware: dict) -> list:
+		"""Build the movement key list for the web keypad grid from the
+		character config's movements. Each entry carries the keyboard key, the
+		movement's gamepad buttons (kept for later use in the UI), and the
+		human-readable description. Movements with no keyboard key are skipped."""
+		key_map = []
+		for m in hardware.get('movements', []):
+			key = str(m.get('key', '')).strip()
+			if not key:
+				continue
+			key_map.append({
+				'key': key,
+				'gamepad_buttons': m.get('gamepad_buttons', []),
+				'description': m.get('description', ''),
+			})
+		return key_map
 
 	def on_config_save(self, updates: dict) -> None:
 		"""Handle config edits from the web UI: write to disk, re-apply,
@@ -293,12 +313,18 @@ class Kermit:
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
 		self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
 		self.web_server.broadcast('configLoaded', self._config_data)
+		self.web_server.broadcast('keyMapLoaded', self._key_map)
 		self.on_update_status(self._prev_status_id, self._prev_status_value)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
 			match = next((n for n in (self.wifi_access_points or []) if n['ssid'] == current_ssid), None)
 			self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength'] if match else 0})
 		self.wifi_management.scan()
+
+	def on_movement_key_activated(self, key: str, on: bool) -> None:
+		"""A movement was activated or released from any source (keyboard,
+		gamepad, MIDI, or show playback)."""
+		self.web_server.broadcast('movementKeyActivated', {"key": str(key).lower(), "on": bool(on)})
 
 	def on_wakeword_event(self) -> None:
 		def handle():
