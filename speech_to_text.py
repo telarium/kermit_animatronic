@@ -66,11 +66,53 @@ class SpeechToText:
 		print("SpeechToText: ReSpeaker not found!")
 		return "plughw:0,0"
 
+	def _whisper_lib_dirs(self) -> list:
+		"""Find every directory under the whisper build tree that holds a .so.
+
+		whisper-server links against libwhisper.so.1 and libggml.so.0, which
+		the build leaves in subdirs of lib/whisper/build/ (e.g. build/src,
+		build/ggml/src) rather than anywhere on the default linker path. We
+		collect all of them so LD_LIBRARY_PATH covers wherever this particular
+		build placed its shared objects.
+		"""
+		whisper_build = os.path.join(
+			os.path.dirname(os.path.abspath(__file__)), "lib", "whisper", "build"
+		)
+		lib_dirs = set()
+		for root, _dirs, files in os.walk(whisper_build):
+			if any(f.endswith(".so") or ".so." in f for f in files):
+				lib_dirs.add(root)
+		return sorted(lib_dirs)
+
 	def _start_whisper_server(self) -> None:
-		"""Launch whisper-server as a background subprocess."""
+		"""Launch whisper-server and wait until it actually answers.
+
+		Loading the ggml model on the Orin Nano takes noticeably longer than a
+		fixed sleep can safely cover (base.en especially), so instead of
+		sleeping a guessed interval we poll the port until the server responds
+		or the process dies. This prevents the first transcription POST from
+		racing an unready server (Connection refused).
+
+		The server's shared libs (libwhisper.so.1, libggml.so.0) live in the
+		build tree, not on the default linker path, so we pass an explicit
+		LD_LIBRARY_PATH via env — this makes startup independent of .bashrc and
+		survives being launched under sudo (which strips the user environment).
+		"""
 		# Kill any existing whisper-server processes first
 		subprocess.run(["pkill", "-f", "whisper-server"], capture_output=True)
 		time.sleep(1)
+
+		# Prepend the whisper build lib dirs to LD_LIBRARY_PATH.
+		env = os.environ.copy()
+		lib_dirs = self._whisper_lib_dirs()
+		if lib_dirs:
+			existing = env.get("LD_LIBRARY_PATH", "")
+			env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+			print(f"SpeechToText: whisper LD_LIBRARY_PATH += {':'.join(lib_dirs)}")
+		else:
+			print("SpeechToText: WARNING — no whisper .so dirs found under build/; "
+			      "libwhisper/libggml may fail to load.")
+
 		print("SpeechToText: starting whisper-server...")
 		self._server_proc = subprocess.Popen(
 			[
@@ -78,12 +120,47 @@ class SpeechToText:
 				"-m", self.WHISPER_MODEL,
 				"--host", "127.0.0.1",
 				"--port", "8080",
+				# Flash attention defaults ON in recent whisper.cpp and HANGS
+				# GPU inference on the Orin (Ampere 8.7). Disable it — without
+				# this the server accepts the request then never returns.
+				"--no-flash-attn",
 			],
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=env,
 		)
-		time.sleep(2)
-		print("SpeechToText: whisper-server ready.")
+
+		if self._wait_for_whisper_ready(timeout=60.0):
+			print("SpeechToText: whisper-server ready.")
+		else:
+			print("SpeechToText: WARNING — whisper-server did not become ready; "
+			      "transcription will fail until it is up.")
+
+	def _wait_for_whisper_ready(self, timeout: float = 60.0, interval: float = 0.5) -> bool:
+		"""Poll the whisper-server until it responds or times out.
+
+		Returns True once the HTTP endpoint is reachable. Returns False if the
+		timeout elapses or the server process exits early (e.g. bad model path,
+		port already bound, missing CUDA libs) — in which case _server_proc has
+		a non-None poll() and we stop waiting immediately.
+		"""
+		deadline = time.monotonic() + timeout
+		while time.monotonic() < deadline:
+			# If the process already exited, no point waiting for the port.
+			if self._server_proc is not None and self._server_proc.poll() is not None:
+				code = self._server_proc.returncode
+				print(f"SpeechToText: whisper-server exited early (code {code}). "
+				      f"Check model path '{self.WHISPER_MODEL}' and that port 8080 is free.")
+				return False
+			try:
+				# A GET to the inference endpoint returns an error status (it
+				# wants a POST), but ANY HTTP response means the server is up
+				# and listening — which is all we need to know.
+				requests.get("http://127.0.0.1:8080/", timeout=1.0)
+				return True
+			except requests.exceptions.RequestException:
+				time.sleep(interval)
+		return False
 
 	def listen_once(self) -> None:
 		if self._listening:
@@ -233,13 +310,21 @@ class SpeechToText:
 					self.WHISPER_URL,
 					files={"file": ("audio.wav", f, "audio/wav")},
 					data={"temperature": "0", "response_format": "json"},
+					timeout=30.0,
 				)
 			if response.ok:
 				text = response.json().get("text", "").strip()
 				# Whisper sometimes returns this literal string for silence
 				if text.upper() == "[BLANK_AUDIO]":
 					return ""
+				print(f"SpeechToText: transcribed: {text!r}")
 				return text
+			else:
+				print(f"SpeechToText: whisper returned HTTP {response.status_code}: "
+				      f"{response.text[:200]}")
+		except requests.exceptions.Timeout:
+			print("SpeechToText: transcription timed out (whisper-server slow or stuck). "
+			      "First GPU inference can be slow; if this recurs, check server load.")
 		except Exception as e:
 			print(f"SpeechToText: transcription error: {e}")
 		finally:

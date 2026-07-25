@@ -5,6 +5,7 @@ import time
 import warnings
 import subprocess
 import usb_monitor
+import audio_setup
 import pygame
 
 # Suppress noise — must be before any imports that touch audio
@@ -22,11 +23,14 @@ _devnull = open(os.devnull, 'w')
 _old_stderr = os.dup(2)
 os.dup2(_devnull.fileno(), 2)
 
-# Init pygame mixer — retry until USB audio device is available
+# Init pygame mixer — playback runs through the on-board APE card driving the
+# PCM5102 I2S DAC. Route the AHUB crossbar (does not survive reboot) and locate
+# the APE device, retrying until it's ready. The ReSpeaker USB mic is handled
+# separately (init_respeaker / speech_to_text) and is input-only.
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
 
 for attempt in range(30):
-	audio_card = usb_monitor.find_usb_audio_card()
+	audio_card = audio_setup.init_audio()
 	if audio_card:
 		os.environ['AUDIODEV'] = audio_card
 		try:
@@ -35,10 +39,10 @@ for attempt in range(30):
 		except Exception as e:
 			print(f"Audio: mixer init failed (attempt {attempt + 1}/30): {e}, retrying...")
 	else:
-		print(f"Audio: USB device not found (attempt {attempt + 1}/30), retrying...")
+		print(f"Audio: APE device not found (attempt {attempt + 1}/30), retrying...")
 	time.sleep(2)
 else:
-	print("Audio: USB audio device not found after 30 attempts. Exiting.")
+	print("Audio: APE audio device not found after 30 attempts. Exiting.")
 	sys.exit(1)
 
 usb_monitor.init_respeaker()

@@ -218,7 +218,7 @@ class MIDI:
 			data = bytes([0x80, note & 0x7F, 0])
 		try:
 			os.write(self._tx_fd, data)
-			print(f"MIDI: sent {'note_on' if value == 1 else 'note_off'} note={note} velocity={127 if value == 1 else 0}")
+			#print(f"MIDI: sent {'note_on' if value == 1 else 'note_off'} note={note} velocity={127 if value == 1 else 0}")
 		except OSError as e:
 			print(f"MIDI: send failed — {e}")
 

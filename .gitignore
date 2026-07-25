@@ -212,14 +212,18 @@ en_US-ryan-low.onnx
 lib/respeaker/
 
 # Kermit - whisper binary exceptions
+# CPU-only whisper build (no CUDA — small libs, ~3MB total). whisper-server
+# links against libwhisper.so.1 and the libggml*.so family; all of them must be
+# committed together, so we whitelist the server plus every .so under build/bin.
+# (Do NOT build with -DGGML_CUDA=ON — that produces a 500MB+ libggml-cuda.so
+# that must not go in git.)
 !lib/
 !lib/whisper/
 !lib/whisper/build/
 !lib/whisper/build/bin/
 !lib/whisper/build/bin/whisper-server
-!lib/whisper/build/src/
-!lib/whisper/build/src/libwhisper.so
-!lib/whisper/build/src/libwhisper.so.1
+!lib/whisper/build/bin/*.so
+!lib/whisper/build/bin/*.so.*
 !lib/whisper/models/
 !lib/whisper/models/.gitkeep
 !lib/whisper/models/download-ggml-model.sh
@@ -244,3 +248,4 @@ lib/pl2303/src/modules.order
 !lib/f_midi/usb_f_midi.ko
 
 config.cfg
+shows/
