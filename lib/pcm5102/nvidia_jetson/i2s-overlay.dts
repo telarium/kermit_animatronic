@@ -1,0 +1,74 @@
+/dts-v1/;
+/ {
+	jetson-header-name = "Jetson 40pin Header";
+	overlay-name = "User Custom [2026-07-16-184633]";
+	compatible = "nvidia,p3768-0000+p3767-0000\0nvidia,p3768-0000+p3767-0001\0nvidia,p3768-0000+p3767-0003\0nvidia,p3768-0000+p3767-0004\0nvidia,p3768-0000+p3767-0005\0nvidia,p3768-0000+p3767-0000-super\0nvidia,p3768-0000+p3767-0001-super\0nvidia,p3768-0000+p3767-0003-super\0nvidia,p3768-0000+p3767-0004-super\0nvidia,p3768-0000+p3767-0005-super\0nvidia,p3509-0000+p3767-0000\0nvidia,p3509-0000+p3767-0001\0nvidia,p3509-0000+p3767-0003\0nvidia,p3509-0000+p3767-0004\0nvidia,p3509-0000+p3767-0005";
+	fragment@0 {
+		target = <0xffffffff>;
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <0x01>;
+			exp-header-pinmux {
+				phandle = <0x01>;
+				hdr40-pin12 {
+					nvidia,gpio-mode = <0x00>;
+					nvidia,pins = "soc_gpio41_ph7";
+					nvidia,function = "i2s2";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x01>;
+				};
+				hdr40-pin35 {
+					nvidia,gpio-mode = <0x00>;
+					nvidia,pins = "soc_gpio44_pi2";
+					nvidia,function = "i2s2";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x01>;
+				};
+				hdr40-pin38 {
+					nvidia,gpio-mode = <0x00>;
+					nvidia,pins = "soc_gpio43_pi1";
+					nvidia,function = "i2s2";
+					nvidia,tristate = <0x01>;
+					nvidia,enable-input = <0x01>;
+				};
+				hdr40-pin40 {
+					nvidia,gpio-mode = <0x00>;
+					nvidia,pins = "soc_gpio42_pi0";
+					nvidia,function = "i2s2";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x00>;
+				};
+			};
+		};
+	};
+	fragment@1 {
+		target = <0xffffffff>;
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <0x02>;
+			exp-header-pinmux {
+				phandle = <0x02>;
+			};
+		};
+	};
+	__symbols__ {
+		jetson_io_pinmux = "/fragment@0/__overlay__/exp-header-pinmux";
+		jetson_io_pinmux_aon = "/fragment@1/__overlay__/exp-header-pinmux";
+	};
+	__fixups__ {
+		pinmux = "/fragment@0:target:0";
+		pinmux_aon = "/fragment@1:target:0";
+	};
+	__local_fixups__ {
+		fragment@0 {
+			__overlay__ {
+				pinctrl-0 = <0x00>;
+			};
+		};
+		fragment@1 {
+			__overlay__ {
+				pinctrl-0 = <0x00>;
+			};
+		};
+	};
+};
