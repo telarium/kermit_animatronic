@@ -285,7 +285,17 @@ class SpeechToText:
 				leftover = data
 
 		finally:
-			proc.terminate()
+			# terminate() only signals; wait() ensures arecord has actually
+			# exited and released the ALSA capture device before we return, so
+			# the wakeword's arecord can open the mic cleanly next.
+			try:
+				proc.terminate()
+				proc.wait(timeout=3)
+			except Exception:
+				try:
+					proc.kill()
+				except Exception:
+					pass
 			self._listening = False
 
 	def _rms(self, data: bytes) -> float:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import os
+import re
 import subprocess
 import threading
 import time
 import numpy as np
-import pyaudio
 from pydispatch import dispatcher
 from openwakeword.model import Model
 
@@ -13,7 +13,6 @@ class WakeWord:
 	XVF_PY  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
 
 	CHUNK    = 1280
-	FORMAT   = pyaudio.paInt16
 	CHANNELS = 2
 	RATE     = 16000
 
@@ -28,6 +27,7 @@ class WakeWord:
 		self._stopped_event = threading.Event()
 		self._stopped_event.set()  # starts in the "stopped" state
 		self.threshold: float = 0.3
+		self._last_logged_device = None
 
 		_devnull = open(os.devnull, 'w')
 		_old_stderr = os.dup(2)
@@ -37,7 +37,6 @@ class WakeWord:
 			inference_framework="onnx",
 			vad_threshold=0.0
 		)
-		self._pa = pyaudio.PyAudio()
 		os.dup2(_old_stderr, 2)
 		os.close(_old_stderr)
 		_devnull.close()
@@ -61,6 +60,12 @@ class WakeWord:
 
 	def set_enabled(self, enabled: bool) -> None:
 		if enabled and not self._enabled:
+			# Ensure any previous listen thread has fully exited before starting
+			# a new one — otherwise two threads (each with its own arecord) can
+			# briefly contend for the mic, corrupting the capture stream.
+			if self._thread is not None and self._thread.is_alive():
+				self._stop_event.set()
+				self._thread.join(timeout=4.0)
 			self._enabled = True
 			self._stop_event.clear()
 			self._stopped_event.clear()
@@ -71,6 +76,10 @@ class WakeWord:
 		elif not enabled and self._enabled:
 			self._enabled = False
 			self._stop_event.set()
+			# Wait for the thread to actually finish and release the mic, so a
+			# following set_enabled(True) can't create an overlapping capture.
+			if self._thread is not None and self._thread.is_alive():
+				self._thread.join(timeout=4.0)
 			print("WakeWord: listening stopped.")
 
 	def wait_until_stopped(self, timeout: float = 4.0) -> bool:
@@ -81,83 +90,117 @@ class WakeWord:
 	# Internal
 	# -------------------------------------------------------------------------
 
-	def _find_device_index(self) -> int:
-		for attempt in range(20):
-			self._pa.terminate()
-			_devnull = open(os.devnull, 'w')
-			_old_stderr = os.dup(2)
-			os.dup2(_devnull.fileno(), 2)
-			self._pa = pyaudio.PyAudio()
-			os.dup2(_old_stderr, 2)
-			os.close(_old_stderr)
-			_devnull.close()
+	def _respeaker_alsa_device(self) -> str:
+		"""Find the ReSpeaker's ALSA capture device string (e.g. plughw:0,0).
 
-			for i in range(self._pa.get_device_count()):
-				d = self._pa.get_device_info_by_index(i)
-				if d['maxInputChannels'] > 0 and 'respeaker' in d['name'].lower():
-					print(f"WakeWord: found ReSpeaker at index {i} — {d['name']}")
-					return i
+		Reads `arecord -l` directly — ALSA always lists the device correctly
+		(confirmed even when PortAudio's cache goes stale), so this never gets
+		into the "device not found" state the old PyAudio path suffered.
+		"""
+		for attempt in range(20):
+			try:
+				out = subprocess.run(
+					["arecord", "-l"], capture_output=True, text=True
+				).stdout
+				for line in out.splitlines():
+					# e.g. "card 0: Array [reSpeaker XVF3800 4-Mic Array], device 0: ..."
+					if "respeaker" in line.lower() and line.strip().lower().startswith("card"):
+						# parse "card N" and "device M"
+						m = re.search(r"card (\d+):.*device (\d+):", line)
+						if m:
+							dev = f"plughw:{m.group(1)},{m.group(2)}"
+							if dev != self._last_logged_device:
+								print(f"WakeWord: found ReSpeaker at {dev}")
+								self._last_logged_device = dev
+							return dev
+			except Exception as e:
+				print(f"WakeWord: error scanning arecord -l: {e}")
 			print(f"WakeWord: ReSpeaker not found, retrying ({attempt + 1}/20)...")
 			time.sleep(1)
 		raise RuntimeError("ReSpeaker not found — is it plugged in?")
 
-	def _open_stream(self, device_index: int) -> pyaudio.Stream:
-		_devnull = open(os.devnull, 'w')
-		_old_stderr = os.dup(2)
-		os.dup2(_devnull.fileno(), 2)
-		stream = self._pa.open(
-			format=self.FORMAT,
-			channels=self.CHANNELS,
-			rate=self.RATE,
-			input=True,
-			frames_per_buffer=self.CHUNK,
-			input_device_index=device_index,
-		)
-		os.dup2(_old_stderr, 2)
-		os.close(_old_stderr)
-		_devnull.close()
-		return stream
-
 	def _listen_loop(self) -> None:
 		try:
+			consecutive_failures = 0
 			while not self._stop_event.is_set():
+				proc = None
 				try:
-					device_index = self._find_device_index()
-					stream = self._open_stream(device_index)
+					device = self._respeaker_alsa_device()
+					# Brief settle: if STT or a prior cycle just released the mic,
+					# the ALSA capture device can need a moment before it yields
+					# samples. A short wait here avoids opening into a half-freed
+					# device that produces no audio.
+					time.sleep(0.2)
+					# Capture raw PCM from the ReSpeaker via arecord — same
+					# mechanism STT uses, immune to PortAudio device caching.
+					# S16_LE stereo @ 16k matches the old PyAudio config; we take
+					# the left channel as mono for the wakeword model.
+					bytes_per_frame = 2 * self.CHANNELS          # int16 * channels
+					chunk_bytes = self.CHUNK * bytes_per_frame
+					proc = subprocess.Popen(
+						[
+							"arecord",
+							"-D", device,
+							"-f", "S16_LE",
+							"-r", str(self.RATE),
+							"-c", str(self.CHANNELS),
+							"-t", "raw",
+						],
+						stdout=subprocess.PIPE,
+						stderr=subprocess.DEVNULL,
+					)
 
-					try:
-						while not self._stop_event.is_set():
-							audio = stream.read(self.CHUNK, exception_on_overflow=False)
-							audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, 2)
-							audio_mono = audio_np[:, 0]
+					got_audio = False
+					while not self._stop_event.is_set():
+						audio = proc.stdout.read(chunk_bytes)
+						if not audio or len(audio) < chunk_bytes:
+							# arecord died or short read — break to re-open.
+							break
+						got_audio = True
+						consecutive_failures = 0
+						audio_np = np.frombuffer(audio, dtype=np.int16).reshape(-1, self.CHANNELS)
+						audio_mono = audio_np[:, 0]
 
-							prediction = self._oww.predict(audio_mono)
-							score = prediction.get(os.path.splitext(os.path.basename(self.model_path))[0], 0)
+						prediction = self._oww.predict(audio_mono)
+						score = prediction.get(os.path.splitext(os.path.basename(self.model_path))[0], 0)
 
-							#if score > 0.05:
-							#	print(f"score: {score:.3f}")
+						if score > self.threshold:
+							print(f"Wakeword detected! (score: {score:.2f})")
+							self._stop_event.set()
+							self._enabled = False
+							self._oww.reset()
+							# Dispatch after stopping so the handler can safely open
+							# the mic (arecord) without contending with this capture.
+							dispatcher.send(signal="wakewordEvent")
+							if self.on_detected:
+								self.on_detected(score)
+							# Inner loop exits because _stop_event is now set.
 
-							if score > self.threshold:
-								print(f"Wakeword detected! (score: {score:.2f})")
-								self._stop_event.set()
-								self._enabled = False
-								self._oww.reset()
-								# Dispatch after stopping so the handler can safely open
-								# the mic (arecord) without contending with this stream.
-								dispatcher.send(signal="wakewordEvent")
-								if self.on_detected:
-									self.on_detected(score)
-								# Inner loop exits because _stop_event is now set.
-					finally:
-						try:
-							stream.stop_stream()
-							stream.close()
-						except Exception:
-							pass
-
+					# If arecord produced no audio at all before dying, the mic
+					# was likely still held by a prior process (STT or the last
+					# cycle). Back off briefly so we don't tight-spin.
+					if not got_audio and not self._stop_event.is_set():
+						consecutive_failures += 1
+						time.sleep(0.3)
+						if consecutive_failures >= 30:
+							print("WakeWord: mic not yielding audio after many retries.")
+							consecutive_failures = 0
 				except Exception as e:
 					print(f"WakeWord: error in listen loop: {e}")
 					time.sleep(2)
+				finally:
+					# Always stop the arecord process so it releases the mic —
+					# this is what lets STT's arecord grab it next.
+					if proc is not None:
+						try:
+							proc.terminate()
+							proc.wait(timeout=2)
+						except Exception:
+							try:
+								proc.kill()
+							except Exception:
+								pass
+
 		finally:
 			# Signal that the mic stream is fully closed, whatever the exit reason.
 			self._stopped_event.set()
@@ -165,7 +208,6 @@ class WakeWord:
 
 	def __del__(self):
 		self.set_enabled(False)
-		self._pa.terminate()
 
 
 if __name__ == "__main__":
