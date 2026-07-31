@@ -18,7 +18,7 @@
 			"program_blue_channel": 0,
 			"inverted": false,
 			"gpio": {
-				"pin1": { "address": "0x20", "pin": 0, "max_sec": 0.75 }
+				"pin1": { "address": "0x20", "pin": 0, "max_sec": 20 }
 			}
 		},
 		{
@@ -30,7 +30,7 @@
 			"program_blue_channel": 1,
 			"inverted": false,
 			"gpio": {
-				"pin1": { "address": "0x20", "pin": 1, "max_sec": 1.0 }
+				"pin1": { "address": "0x20", "pin": 1, "max_sec": 3.0 }
 			}
 		},
 		{
@@ -42,7 +42,7 @@
 			"program_blue_channel": 2,
 			"inverted": false,
 			"gpio": {
-				"pin1": { "address": "0x20", "pin": 2, "max_sec": 1.0 }
+				"pin1": { "address": "0x20", "pin": 2, "max_sec": 3.0 }
 			}
 		},
 		{
@@ -67,7 +67,7 @@
 			"program_blue_channel": 4,
 			"inverted": false,
 			"gpio": {
-				"pin1": { "address": "0x20", "pin": 4, "max_sec": 1.0 }
+				"pin1": { "address": "0x20", "pin": 4, "max_sec": 3.0 }
 			}
 		},
 		{
@@ -79,7 +79,7 @@
 			"program_blue_channel": 5,
 			"inverted": false,
 			"gpio": {
-				"pin1": { "address": "0x20", "pin": 3, "max_sec": 1.0 }
+				"pin1": { "address": "0x20", "pin": 3, "max_sec": 3.0 }
 			}
 		},
 		{
