@@ -108,7 +108,7 @@ class MIDI:
 			w(f"{G}/bcdUSB",    "0x0200")
 
 			os.makedirs(f"{G}/strings/0x409", exist_ok=True)
-			w(f"{G}/strings/0x409/manufacturer", "Andrew")
+			w(f"{G}/strings/0x409/manufacturer", "LangleyCreations")
 			w(f"{G}/strings/0x409/product",      "Animatronic MIDI")
 			w(f"{G}/strings/0x409/serialnumber",  "kermit-0001")
 
@@ -202,7 +202,7 @@ class MIDI:
 				break
 
 	def _dispatch(self, msg_type: str, note: int, value: int) -> None:
-		dispatcher.send(signal="midi_input", msg_type=msg_type, note=note, value=value)
+		dispatcher.send(signal="onMidiEvent", midi_note=note, val=value)
 
 	# ------------------------------------------------------------------ #
 	#  Send                                                                #
