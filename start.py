@@ -128,7 +128,7 @@ class Kermit:
 		self.stt = SpeechToText()
 		self.tts = TextToSpeech()
 		self.llm = LLM()
-		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir)
+		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir, hardware_path=hardware_path)
 		self.movements = Movement(hardware_path)
 		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
