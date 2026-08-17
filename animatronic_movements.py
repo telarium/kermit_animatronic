@@ -131,7 +131,9 @@ class Movement:
 		b_do_callback = False
 		for movement in self.all:
 			if movement.key == key and key:
-				#print(movement.description)
+				print(movement.description)
+				print(val)
+				print(key)
 				if val == 1 and not movement.key_is_pressed:
 					movement.key_is_pressed = True
 					b_do_callback = True
@@ -140,6 +142,7 @@ class Movement:
 					movement.key_is_pressed = False
 					b_do_callback = True
 					dispatcher.send(signal="onMovementKeyActivated", key=movement.key, on=False)
+
 				if b_do_callback:
 					if not b_mute_output:
 						self.midi.send_message(movement.midi_note, val)
@@ -171,6 +174,9 @@ class Movement:
 				break
 
 	def on_midi_event(self, midi_note: int, val: int) -> None:
+		if( val > 0):
+			val = 1
+
 		for movement in self.all:
 			if movement.midi_note == midi_note:
 				self.execute_movement(movement.key, val, True)
@@ -179,5 +185,5 @@ class Movement:
 	def on_gamepad_event(self, button: Button, val: int) -> None:
 		for movement in self.all:
 			if button in movement.gamepad_buttons:
-				self.execute_movement(movement.key, val, True)
+				self.execute_movement(movement.key, val, False)
 				break
