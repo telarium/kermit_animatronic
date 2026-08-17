@@ -148,7 +148,7 @@ class USBGamepadReader:
 				time.sleep(1)
 
 	def _dispatch(self, button: Button, val: int) -> None:
-		print(f"Gamepad: button={button.name} val={val}")
+		#print(f"Gamepad: button={button.name} val={val}")
 		dispatcher.send(signal="gamepadEvent", button=button, val=val)
 
 	def _process_button_event(self, event: InputEvent) -> None:
