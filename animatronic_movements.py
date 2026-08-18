@@ -131,9 +131,6 @@ class Movement:
 		b_do_callback = False
 		for movement in self.all:
 			if movement.key == key and key:
-				print(movement.description)
-				print(val)
-				print(key)
 				if val == 1 and not movement.key_is_pressed:
 					movement.key_is_pressed = True
 					b_do_callback = True

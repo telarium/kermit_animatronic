@@ -62,6 +62,7 @@ from text_to_speech import TextToSpeech
 from voice_commands import VoiceCommandHandler
 from llm_service import LLM
 from voice_player import VoicePlayer
+from animation_controller import AnimationController
 from animatronic_movements import Movement
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
@@ -120,6 +121,7 @@ class Kermit:
 		wakeword_model  = os.path.join(_BASE_DIR, hardware['wakeword']['model'])
 		wakeword_desc   = hardware['wakeword']['description']
 		voices_dir      = os.path.join(_BASE_DIR, hardware['voice_directory'])
+		animation_dir   = os.path.join(_BASE_DIR, hardware.get('animation_directory', ''))
 		hardware_path   = hardware['_path']
 		html_config     = hardware.get('html', {})
 
@@ -129,6 +131,7 @@ class Kermit:
 		self.tts = TextToSpeech()
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir, hardware_path=hardware_path)
+		self.animation_controller = AnimationController(animation_dir=animation_dir)
 		self.movements = Movement(hardware_path)
 		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
@@ -333,6 +336,7 @@ class Kermit:
 	def on_wakeword_event(self) -> None:
 		def handle():
 			self.show_player.stop_show()
+			dispatcher.send(signal="animationStart", name="wakeword")
 			if not self.wakeword.wait_until_stopped(timeout=4.0):
 				print("WakeWord: timed out waiting for stream to close, proceeding anyway.")
 			self.stt.listen_once()
@@ -343,13 +347,16 @@ class Kermit:
 			if self._awaiting_followup:
 				self._awaiting_followup = False
 			self.wakeword.set_enabled(True)
+			dispatcher.send(signal="animationStop")
 			return
 		print(f"Heard: {text}")
 		if self._awaiting_followup or not self.voiceCommandHandler.parse(text):
 			self._awaiting_followup = False
 			self.llm.send(text)
 			self.wakeword.set_enabled(False)
+			dispatcher.send(signal="animationStart", name="thinking", bStartAtRandomTime=False, bLoop=True)
 		else:
+			dispatcher.send(signal="animationStop")
 			self.wakeword.set_enabled(True)
 
 	def on_execute_text_to_speech(self, text: str) -> None:
@@ -362,6 +369,7 @@ class Kermit:
 		self.tts.speak(text)
 
 	def on_voice_play(self, file: str) -> None:
+		dispatcher.send(signal="animationStart", name="speaking", bStartAtRandomTime=True, bLoop=True)
 		self.voice_player.play(file)
 
 	def on_voice_play_sequence(self, fileList) -> None:
@@ -374,11 +382,13 @@ class Kermit:
 			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
 			if self._awaiting_followup:
 				def delayed_listen():
+					dispatcher.send(signal="animationStart", name="wakeword")
 					time.sleep(0.5)
 					print("Kermit: awaiting follow-up response, listening...")
 					self.stt.listen_once()
 				threading.Thread(target=delayed_listen, daemon=True).start()
 			else:
+				dispatcher.send(signal="animationStop")
 				self.wakeword.set_enabled(True)
 
 	def on_update_status(self, id: str, value: any = None) -> None:
