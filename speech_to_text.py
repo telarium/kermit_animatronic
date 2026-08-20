@@ -17,6 +17,12 @@ class SpeechToText:
 	WHISPER_MODEL      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/models/ggml-base.en.bin")
 	WHISPER_URL        = "http://127.0.0.1:8080/inference"
 
+	# Beam search width. 1 = greedy decoding, which commits to the highest
+	# probability token at each step and cannot revise it
+	# Wider beams score whole candidate sequences instead, at the
+	# cost of decode time. 5 is whisper.cpp's own CLI default.
+	BEAM_SIZE          = 5
+
 	SAMPLE_RATE        = 16000
 	VAD_FRAME_MS       = 30                                       # webrtcvad supports 10, 20, or 30ms
 	VAD_FRAME_SAMPLES  = int(SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 samples
@@ -120,6 +126,8 @@ class SpeechToText:
 				"-m", self.WHISPER_MODEL,
 				"--host", "127.0.0.1",
 				"--port", "8080",
+				# Beam search width — see BEAM_SIZE.
+				"-bs", str(self.BEAM_SIZE),
 				# Flash attention defaults ON in recent whisper.cpp and HANGS
 				# GPU inference on the Orin (Ampere 8.7). Disable it — without
 				# this the server accepts the request then never returns.
@@ -319,7 +327,10 @@ class SpeechToText:
 				response = requests.post(
 					self.WHISPER_URL,
 					files={"file": ("audio.wav", f, "audio/wav")},
-					data={"temperature": "0", "response_format": "json"},
+					# temperature is deliberately omitted: some builds treat an
+					# explicit 0 as a request for greedy decoding, which would
+					# silently override the beam width set at server launch.
+					data={"response_format": "json"},
 					timeout=30.0,
 				)
 			if response.ok:
