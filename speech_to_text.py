@@ -2,65 +2,83 @@
 import os
 import subprocess
 import threading
-import tempfile
-import wave
 import time
 import numpy as np
-import requests
-import webrtcvad
-from collections import deque
+import sherpa_onnx
 from pydispatch import dispatcher
 
 
 class SpeechToText:
-	WHISPER_SERVER_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/build/bin/whisper-server")
-	WHISPER_MODEL      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/whisper/models/ggml-base.en.bin")
-	WHISPER_URL        = "http://127.0.0.1:8080/inference"
+	"""Streaming speech-to-text via sherpa-onnx + Nemotron streaming transducer.
 
-	# Beam search width. 1 = greedy decoding, which commits to the highest
-	# probability token at each step and cannot revise it
-	# Wider beams score whole candidate sequences instead, at the
-	# cost of decode time. 5 is whisper.cpp's own CLI default.
-	BEAM_SIZE          = 5
+	Replaces the previous whisper.cpp implementation. The important
+	architectural difference: this is a *streaming* recognizer, so
+	end-of-speech is decided by the acoustic model rather than by audio
+	levels. The recognizer reports an endpoint when the decoder stops
+	emitting tokens — background noise produces no tokens, so a noisy room
+	no longer holds the utterance open the way an RMS threshold did.
 
-	SAMPLE_RATE        = 16000
-	VAD_FRAME_MS       = 30                                       # webrtcvad supports 10, 20, or 30ms
-	VAD_FRAME_SAMPLES  = int(SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 samples
-	VAD_FRAME_BYTES    = VAD_FRAME_SAMPLES * 2                    # 960 bytes (int16)
-	VAD_AGGRESSIVENESS = 3                                        # 0–3; 3 = most aggressive noise filtering
+	Consequently the old machinery is gone entirely: no adaptive noise
+	floor, no SPEECH_RATIO, no webrtcvad, no preroll buffer, no
+	whisper-server subprocess, no WAV temp files, no HTTP round trip.
+	"""
 
-	# Adaptive noise floor settings
-	NOISE_FLOOR_MIN    = 50                                       # never go below this (avoids hypersensitivity in silence)
-	NOISE_FLOOR_WINDOW = 67                                       # frames to average for noise floor (~2 seconds at 30ms/frame)
-	SPEECH_RATIO       = 3.0                                      # speech threshold = floor * this ratio
+	MODEL_DIR = os.path.join(
+		os.path.dirname(os.path.abspath(__file__)),
+		"lib/sherpa_onnx/models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+	)
 
-	PREROLL_FRAMES     = 8                                        # frames before speech start to include (~240ms)
+	SAMPLE_RATE = 16000
 
-	# End-of-speech: consecutive VAD-silent frames before stopping.
-	# At 30ms/frame: 25 frames ≈ 750ms of silence.
-	SILENCE_FRAMES_END = 25
+	# Orin Nano has 6 Cortex-A78AE cores. 4 leaves headroom for the wakeword
+	# session, the web server, and the animation/movement threads. Raise to 5
+	# only if measured RTF is uncomfortably close to 1.0.
+	NUM_THREADS = 4
 
-	# Minimum speech frames before bothering to transcribe.
-	MIN_SPEECH_FRAMES  = 4                                        # ~120ms
+	# int8-quantized ONNX is a CPU-side optimization — the quantized ops do
+	# not map onto the CUDA execution provider, so requesting "cuda" here
+	# would silently fall back to CPU for most of the graph while adding
+	# onnxruntime-gpu setup pain for no gain. Keep this on cpu.
+	PROVIDER = "cpu"
 
-	# Safety net: maximum speech duration before forcing end.
-	# At 30ms/frame: 333 frames ≈ 10 seconds.
-	MAX_SPEECH_FRAMES  = 333
+	# --- Endpoint rules ------------------------------------------------------
+	# These are what replace SILENCE_FRAMES_END / THRESHOLD. "Trailing
+	# silence" here means "the decoder emitted no tokens", not "the signal
+	# went quiet", which is the whole point of the change.
+	#
+	# rule1 fires on trailing silence with NO speech required — i.e. the user
+	# never said anything. We use it to detect a dead-air turn.
+	# rule2 is the normal end-of-utterance: speech happened, then stopped.
+	# rule3 is the hard cap on a single utterance (the old MAX_SPEECH_FRAMES).
+	RULE1_MIN_TRAILING_SILENCE = 2.4
+	RULE2_MIN_TRAILING_SILENCE = 1.2
+	RULE3_MIN_UTTERANCE_LENGTH = 15.0
 
-	# Maximum frames to wait for speech to begin before giving up.
-	# At 30ms/frame: 333 frames ≈ 10 seconds.
-	MAX_PRESPEECH_FRAMES = 333
+	# How long to wait for the user to start talking at all before giving up
+	# and reporting [SILENCE]. Replaces MAX_PRESPEECH_FRAMES.
+	PRESPEECH_TIMEOUT_S = 10.0
+
+	# Audio read granularity. 100ms keeps the decode loop responsive without
+	# thrashing on tiny reads.
+	READ_CHUNK_MS = 100
+	READ_CHUNK_SAMPLES = int(SAMPLE_RATE * READ_CHUNK_MS / 1000)
+
+	# ReSpeaker outputs beamformed audio on the left channel of a stereo stream.
+	CHANNELS = 2
 
 	def __init__(self) -> None:
-		self._server_proc   = None
 		self._listen_thread = None
-		self._listening     = False
-		self._vad           = webrtcvad.Vad(self.VAD_AGGRESSIVENESS)
-		self._alsa_device   = self._find_alsa_device()
+		self._listening = False
+		self._alsa_device = self._find_alsa_device()
 		print(f"SpeechToText: using device {self._alsa_device}")
 
-		self._start_whisper_server()
+		self._recognizer = self._build_recognizer()
+		self._warm_up()
 		print("SpeechToText: initialized.")
+
+	# -------------------------------------------------------------------------
+	# Setup
+	# -------------------------------------------------------------------------
 
 	def _find_alsa_device(self) -> str:
 		result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
@@ -72,103 +90,73 @@ class SpeechToText:
 		print("SpeechToText: ReSpeaker not found!")
 		return "plughw:0,0"
 
-	def _whisper_lib_dirs(self) -> list:
-		"""Find every directory under the whisper build tree that holds a .so.
+	def _build_recognizer(self) -> sherpa_onnx.OnlineRecognizer:
+		"""Load the streaming transducer.
 
-		whisper-server links against libwhisper.so.1 and libggml.so.0, which
-		the build leaves in subdirs of lib/whisper/build/ (e.g. build/src,
-		build/ggml/src) rather than anywhere on the default linker path. We
-		collect all of them so LD_LIBRARY_PATH covers wherever this particular
-		build placed its shared objects.
+		This takes a few seconds (the int8 encoder is ~623MB) and happens once
+		at startup rather than per-utterance, which is why there is no
+		equivalent of the old _wait_for_whisper_ready polling here — by the
+		time __init__ returns, the model is resident and usable.
 		"""
-		whisper_build = os.path.join(
-			os.path.dirname(os.path.abspath(__file__)), "lib", "whisper", "build"
+		encoder = os.path.join(self.MODEL_DIR, "encoder.int8.onnx")
+		decoder = os.path.join(self.MODEL_DIR, "decoder.int8.onnx")
+		joiner = os.path.join(self.MODEL_DIR, "joiner.int8.onnx")
+		tokens = os.path.join(self.MODEL_DIR, "tokens.txt")
+
+		for path in (encoder, decoder, joiner, tokens):
+			if not os.path.exists(path):
+				raise FileNotFoundError(
+					f"SpeechToText: missing model file '{path}'. "
+					f"Run setup.py, or download the model package into {self.MODEL_DIR}."
+				)
+
+		print("SpeechToText: loading Nemotron streaming model...")
+		t0 = time.monotonic()
+		recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+			tokens=tokens,
+			encoder=encoder,
+			decoder=decoder,
+			joiner=joiner,
+			num_threads=self.NUM_THREADS,
+			sample_rate=self.SAMPLE_RATE,
+			feature_dim=80,
+			provider=self.PROVIDER,
+			# sherpa-onnx needs to be told this is a Nemotron cache-aware
+			# transducer; without it the encoder's cache tensors are wired
+			# up as if it were a zipformer2 and decoding produces garbage.
+			model_type="nemotron",
+			# Nemotron only supports greedy_search in sherpa-onnx today.
+			# modified_beam_search (and therefore hotwords) is not wired up
+			# for this model type — passing it raises rather than silently
+			# degrading, so this is explicit on purpose.
+			decoding_method="greedy_search",
+			enable_endpoint_detection=True,
+			rule1_min_trailing_silence=self.RULE1_MIN_TRAILING_SILENCE,
+			rule2_min_trailing_silence=self.RULE2_MIN_TRAILING_SILENCE,
+			rule3_min_utterance_length=self.RULE3_MIN_UTTERANCE_LENGTH,
 		)
-		lib_dirs = set()
-		for root, _dirs, files in os.walk(whisper_build):
-			if any(f.endswith(".so") or ".so." in f for f in files):
-				lib_dirs.add(root)
-		return sorted(lib_dirs)
+		print(f"SpeechToText: model loaded in {time.monotonic() - t0:.1f}s.")
+		return recognizer
 
-	def _start_whisper_server(self) -> None:
-		"""Launch whisper-server and wait until it actually answers.
+	def _warm_up(self) -> None:
+		"""Push a little silence through so the first real utterance isn't slow.
 
-		Loading the ggml model on the Orin Nano takes noticeably longer than a
-		fixed sleep can safely cover (base.en especially), so instead of
-		sleeping a guessed interval we poll the port until the server responds
-		or the process dies. This prevents the first transcription POST from
-		racing an unready server (Connection refused).
-
-		The server's shared libs (libwhisper.so.1, libggml.so.0) live in the
-		build tree, not on the default linker path, so we pass an explicit
-		LD_LIBRARY_PATH via env — this makes startup independent of .bashrc and
-		survives being launched under sudo (which strips the user environment).
+		onnxruntime does lazy allocation on first inference; without this the
+		first ~200ms of the user's first sentence competes with arena setup
+		and can be dropped or decoded poorly.
 		"""
-		# Kill any existing whisper-server processes first
-		subprocess.run(["pkill", "-f", "whisper-server"], capture_output=True)
-		time.sleep(1)
-
-		# Prepend the whisper build lib dirs to LD_LIBRARY_PATH.
-		env = os.environ.copy()
-		lib_dirs = self._whisper_lib_dirs()
-		if lib_dirs:
-			existing = env.get("LD_LIBRARY_PATH", "")
-			env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
-			print(f"SpeechToText: whisper LD_LIBRARY_PATH += {':'.join(lib_dirs)}")
-		else:
-			print("SpeechToText: WARNING — no whisper .so dirs found under build/; "
-			      "libwhisper/libggml may fail to load.")
-
-		print("SpeechToText: starting whisper-server...")
-		self._server_proc = subprocess.Popen(
-			[
-				self.WHISPER_SERVER_BIN,
-				"-m", self.WHISPER_MODEL,
-				"--host", "127.0.0.1",
-				"--port", "8080",
-				# Beam search width — see BEAM_SIZE.
-				"-bs", str(self.BEAM_SIZE),
-				# Flash attention defaults ON in recent whisper.cpp and HANGS
-				# GPU inference on the Orin (Ampere 8.7). Disable it — without
-				# this the server accepts the request then never returns.
-				"--no-flash-attn",
-			],
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-			env=env,
+		stream = self._recognizer.create_stream()
+		stream.accept_waveform(
+			self.SAMPLE_RATE, np.zeros(self.SAMPLE_RATE, dtype=np.float32)
 		)
+		stream.input_finished()
+		while self._recognizer.is_ready(stream):
+			self._recognizer.decode_stream(stream)
+		print("SpeechToText: warm-up complete.")
 
-		if self._wait_for_whisper_ready(timeout=60.0):
-			print("SpeechToText: whisper-server ready.")
-		else:
-			print("SpeechToText: WARNING — whisper-server did not become ready; "
-			      "transcription will fail until it is up.")
-
-	def _wait_for_whisper_ready(self, timeout: float = 60.0, interval: float = 0.5) -> bool:
-		"""Poll the whisper-server until it responds or times out.
-
-		Returns True once the HTTP endpoint is reachable. Returns False if the
-		timeout elapses or the server process exits early (e.g. bad model path,
-		port already bound, missing CUDA libs) — in which case _server_proc has
-		a non-None poll() and we stop waiting immediately.
-		"""
-		deadline = time.monotonic() + timeout
-		while time.monotonic() < deadline:
-			# If the process already exited, no point waiting for the port.
-			if self._server_proc is not None and self._server_proc.poll() is not None:
-				code = self._server_proc.returncode
-				print(f"SpeechToText: whisper-server exited early (code {code}). "
-				      f"Check model path '{self.WHISPER_MODEL}' and that port 8080 is free.")
-				return False
-			try:
-				# A GET to the inference endpoint returns an error status (it
-				# wants a POST), but ANY HTTP response means the server is up
-				# and listening — which is all we need to know.
-				requests.get("http://127.0.0.1:8080/", timeout=1.0)
-				return True
-			except requests.exceptions.RequestException:
-				time.sleep(interval)
-		return False
+	# -------------------------------------------------------------------------
+	# Public API
+	# -------------------------------------------------------------------------
 
 	def listen_once(self) -> None:
 		if self._listening:
@@ -178,120 +166,97 @@ class SpeechToText:
 			else:
 				print("SpeechToText: already listening, ignoring request.")
 				return
-			
+
 		print(f"SpeechToText: listen_once called, _listening={self._listening}")
-		self._listen_thread = threading.Thread(target=self._capture_and_transcribe, daemon=True)
+		self._listen_thread = threading.Thread(
+			target=self._capture_and_transcribe, daemon=True
+		)
 		self._listen_thread.start()
+
+	def shutdown(self) -> None:
+		self._listening = False
+		print("SpeechToText: shutdown complete.")
+
+	# -------------------------------------------------------------------------
+	# Internal
+	# -------------------------------------------------------------------------
 
 	def _capture_and_transcribe(self) -> None:
 		self._listening = True
-		dispatcher.send(signal="updateStatus", id="Voice Command Status", value="Listening...")
+		dispatcher.send(
+			signal="updateStatus", id="Voice Command Status", value="Listening..."
+		)
 
 		arecord_cmd = [
 			"arecord",
 			"-D", self._alsa_device,
 			"-f", "S16_LE",
 			"-r", str(self.SAMPLE_RATE),
-			"-c", "2",            # stereo — ReSpeaker outputs beamformed audio on left channel
+			"-c", str(self.CHANNELS),
 			"--buffer-size=4096",
 			"-t", "raw",
 		]
 
-		proc = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+		proc = subprocess.Popen(
+			arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+		)
 		print(f"SpeechToText: arecord started, pid={proc.pid}")
 
-		speech_frames    = []
-		silence_count    = 0
-		in_speech        = False
-		preroll_buffer   = []
-		leftover         = b""
-		done             = False
-		prespeech_frames = 0
-
-		# Adaptive noise floor — rolling window of recent RMS values while not in speech
-		noise_window   = deque(maxlen=self.NOISE_FLOOR_WINDOW)
-		noise_floor    = self.NOISE_FLOOR_MIN
+		stream = self._recognizer.create_stream()
+		chunk_bytes = self.READ_CHUNK_SAMPLES * 2 * self.CHANNELS
+		deadline = time.monotonic() + self.PRESPEECH_TIMEOUT_S
+		text = ""
+		heard_speech = False
 
 		try:
 			while True:
-				# Read one stereo VAD frame worth of data
-				raw = proc.stdout.read(self.VAD_FRAME_BYTES * 2)  # *2 for stereo
-				if not raw:
+				raw = proc.stdout.read(chunk_bytes)
+				if not raw or len(raw) < chunk_bytes:
+					print("SpeechToText: capture stream ended unexpectedly.")
 					break
 
-				# Extract left channel (beamformed output)
-				samples = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
-				data = samples[:, 0].tobytes()
+				# Take the left channel (ReSpeaker beamformed output) and
+				# convert to the float32 in [-1, 1] that sherpa-onnx expects.
+				samples = np.frombuffer(raw, dtype=np.int16).reshape(-1, self.CHANNELS)
+				mono = samples[:, 0].astype(np.float32) / 32768.0
 
-				# Prepend leftover bytes from last iteration
-				data     = leftover + data
-				leftover = b""
+				stream.accept_waveform(self.SAMPLE_RATE, mono)
+				while self._recognizer.is_ready(stream):
+					self._recognizer.decode_stream(stream)
 
-				# Process complete VAD frames
-				while len(data) >= self.VAD_FRAME_BYTES:
-					frame = data[:self.VAD_FRAME_BYTES]
-					data  = data[self.VAD_FRAME_BYTES:]
+				partial = self._recognizer.get_result(stream).strip()
 
-					energy = self._rms(frame)
+				# The first time tokens appear, the user has started talking.
+				# From here the pre-speech timeout no longer applies — rule2
+				# and rule3 own the rest of the turn.
+				if partial and not heard_speech:
+					heard_speech = True
+					print(f"SpeechToText: speech started ({partial!r}).")
 
-					if not in_speech:
-						prespeech_frames += 1
-						if prespeech_frames >= self.MAX_PRESPEECH_FRAMES:
-							print(f"SpeechToText: no speech detected within timeout, giving up.")
-							dispatcher.send(signal="transcriptionResult", text="[SILENCE]")
-							done = True
-							break
+				if self._recognizer.is_endpoint(stream):
+					if partial:
+						text = partial
+						print(f"SpeechToText: endpoint reached: {text!r}")
+						break
+					# Endpoint with no text is rule1 firing on dead air. Reset
+					# and keep waiting until the pre-speech deadline, rather
+					# than reporting silence after only 2.4s.
+					self._recognizer.reset(stream)
 
-						# Update adaptive noise floor
-						noise_window.append(energy)
-						if len(noise_window) >= 10:  # need at least 10 frames before trusting the floor
-							noise_floor = max(self.NOISE_FLOOR_MIN, float(np.mean(noise_window)))
-
-						threshold = noise_floor * self.SPEECH_RATIO
-
-						if energy > threshold:
-							in_speech     = True
-							silence_count = 0
-							speech_frames = list(preroll_buffer)
-							print(f"SpeechToText: speech started (energy={energy:.0f} threshold={threshold:.0f} floor={noise_floor:.0f}).")
-						else:
-							preroll_buffer.append(frame)
-							if len(preroll_buffer) > self.PREROLL_FRAMES:
-								preroll_buffer.pop(0)
-					else:
-						# Use webrtcvad to detect end-of-speech — smarter than RMS for this
-						speech_frames.append(frame)
-						try:
-							vad_says_speech = self._vad.is_speech(frame, self.SAMPLE_RATE)
-						except Exception:
-							vad_says_speech = energy > noise_floor * self.SPEECH_RATIO
-
-						if vad_says_speech:
-							silence_count = 0
-						else:
-							silence_count += 1
-
-						if silence_count >= self.SILENCE_FRAMES_END or len(speech_frames) >= self.MAX_SPEECH_FRAMES:
-							if len(speech_frames) >= self.MAX_SPEECH_FRAMES:
-								print(f"SpeechToText: max duration reached, forcing end.")
-							else:
-								print(f"SpeechToText: speech ended ({len(speech_frames)} frames, floor={noise_floor:.0f}).")
-							if len(speech_frames) >= self.MIN_SPEECH_FRAMES:
-								text = self._transcribe(speech_frames)
-								if text:
-									print(f"SpeechToText: transcribed: {text}")
-							else:
-								text = ""
-							# Always dispatch so caller can clean up, even if transcription was empty
-							dispatcher.send(signal="transcriptionResult", text=text)
-							done = True
-							break
-
-				if done:
+				if not heard_speech and time.monotonic() > deadline:
+					print("SpeechToText: no speech detected within timeout, giving up.")
 					break
 
-				leftover = data
+			# If we fell out of the loop mid-utterance (arecord died), flush
+			# whatever the decoder still holds rather than discarding it.
+			if not text and heard_speech:
+				stream.input_finished()
+				while self._recognizer.is_ready(stream):
+					self._recognizer.decode_stream(stream)
+				text = self._recognizer.get_result(stream).strip()
 
+		except Exception as e:
+			print(f"SpeechToText: capture/decode error: {e}")
 		finally:
 			# terminate() only signals; wait() ensures arecord has actually
 			# exited and released the ALSA capture device before we return, so
@@ -306,57 +271,9 @@ class SpeechToText:
 					pass
 			self._listening = False
 
-	def _rms(self, data: bytes) -> float:
-		samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-		return np.sqrt(np.mean(samples**2))
-
-	def _transcribe(self, frames: list) -> str:
-		audio = np.frombuffer(b"".join(frames), dtype=np.int16)
-
-		with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-			tmp_path = f.name
-		wf = wave.open(tmp_path, "wb")
-		wf.setnchannels(1)
-		wf.setsampwidth(2)
-		wf.setframerate(self.SAMPLE_RATE)
-		wf.writeframes(audio.tobytes())
-		wf.close()
-
-		try:
-			with open(tmp_path, "rb") as f:
-				response = requests.post(
-					self.WHISPER_URL,
-					files={"file": ("audio.wav", f, "audio/wav")},
-					# temperature is deliberately omitted: some builds treat an
-					# explicit 0 as a request for greedy decoding, which would
-					# silently override the beam width set at server launch.
-					data={"response_format": "json"},
-					timeout=30.0,
-				)
-			if response.ok:
-				text = response.json().get("text", "").strip()
-				# Whisper sometimes returns this literal string for silence
-				if text.upper() == "[BLANK_AUDIO]":
-					return ""
-				print(f"SpeechToText: transcribed: {text!r}")
-				return text
-			else:
-				print(f"SpeechToText: whisper returned HTTP {response.status_code}: "
-				      f"{response.text[:200]}")
-		except requests.exceptions.Timeout:
-			print("SpeechToText: transcription timed out (whisper-server slow or stuck). "
-			      "First GPU inference can be slow; if this recurs, check server load.")
-		except Exception as e:
-			print(f"SpeechToText: transcription error: {e}")
-		finally:
-			os.unlink(tmp_path)
-
-		return ""
-
-	def shutdown(self) -> None:
-		"""Stop listening and kill the whisper-server process."""
-		self._listening = False
-		if self._server_proc:
-			self._server_proc.terminate()
-			self._server_proc = None
-		print("SpeechToText: shutdown complete.")
+		# start.py treats "" and "[SILENCE]" differently from real text, and
+		# llm_service.py's CONTEXT_POSTFIX has explicit handling for
+		# [SILENCE], so preserve that contract exactly.
+		dispatcher.send(
+			signal="transcriptionResult", text=text if text else "[SILENCE]"
+		)

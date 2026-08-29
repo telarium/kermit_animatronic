@@ -3,6 +3,7 @@ import time
 import pygame
 import random
 import threading
+import audio_setup
 from enum import Enum, auto
 from typing import List, Optional
 from pydispatch import dispatcher
@@ -158,6 +159,11 @@ class ShowPlayer:
 
 	def _play_worker(self, audio_path: str) -> None:
 		try:
+			# Bring the DAC up before loading, or the opening moment of the
+			# show gets swallowed. Shared with VoicePlayer, so this is a no-op
+			# when Kermit has just finished speaking.
+			audio_setup.wake_dac_if_needed(self.pygame)
+
 			self.pygame.mixer.music.load(audio_path)
 			self.pygame.mixer.music.play()
 			print(f"ShowPlayer: playing '{audio_path}'")
@@ -178,6 +184,10 @@ class ShowPlayer:
 		finally:
 			self.pygame.mixer.music.stop()
 			self.paused = False
+			# Stamp the END of the show, not the start — a three-minute show
+			# would otherwise look like three minutes of idle time to whatever
+			# plays next.
+			audio_setup.note_playback()
 			if not self._stop_event.is_set():
 				# Natural end — notify the rest of the system.
 				dispatcher.send(signal="showStatus", status="end")

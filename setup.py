@@ -33,14 +33,17 @@ class Setup:
 			"pvporcupine", "rapidfuzz", "pydub", "scipy", "openai", "elevenlabs", "piper-tts",
 			"pywifi", "flask-talisman", "requests", "openwakeword", "pyudev", "anthropic", "smbus2",
 			# USB — pip-only, no apt equivalents
-			"pyusb", "webrtcvad",
-			# whisper/STT
-			"pyaudio",
+			"pyusb",
+			# STT. sherpa-onnx bundles its own onnxruntime, so nothing else is
+			# needed here. webrtcvad and pyaudio were dropped with whisper.cpp:
+			# the streaming transducer does its own endpointing, and both the
+			# wakeword and STT capture paths use arecord rather than PortAudio.
+			"sherpa-onnx",
 			# USB-serial for ProgramBlue / PL2303 adapter
 			"pyserial",
 		])
 		self.setup_piper_models()
-		self.setup_whisper_models()
+		self.setup_sherpa_models()
 		self.setup_openwakeword_models()
 		self.setup_respeaker()
 		self.setup_pl2303()
@@ -54,7 +57,14 @@ class Setup:
 			sys.exit(1)
 
 	def install_python_packages(self, packages: List[str]) -> None:
-		subprocess.check_call(["sudo", "/usr/bin/python", "-m", "pip", "install", "--upgrade", "pip"])
+		# Upgrade pip for the SAME interpreter used for the installs below.
+		# This previously hardcoded /usr/bin/python, which on JetPack is not
+		# necessarily sys.executable — so pip could be upgraded for one
+		# interpreter while packages landed in another.
+		subprocess.check_call(
+			["sudo", sys.executable, "-m", "pip", "install",
+			 "--break-system-packages", "--upgrade", "pip"]
+		)
 		try:
 			for package in packages:
 				subprocess.check_call(
@@ -80,31 +90,47 @@ class Setup:
 			print(f"Failed to set up Piper models: {e}")
 			sys.exit(1)
 
-	def setup_whisper_models(self) -> None:
-		"""Download whisper ggml models into lib/whisper/models/."""
-		script_dir = os.path.dirname(os.path.abspath(__file__))
-		whisper_dir = os.path.join(script_dir, "lib", "whisper")
-		models_dir  = os.path.join(whisper_dir, "models")
-		download_script = os.path.join(models_dir, "download-ggml-model.sh")
+	# Streaming transducer used by speech_to_text.py. The 560ms chunk export
+	# is the accuracy/latency sweet spot: larger chunks are *both* more
+	# accurate and cheaper (fewer encoder invocations per second), but 1120ms
+	# adds noticeable dead air before Kermit responds.
+	SHERPA_MODEL = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+	SHERPA_MODEL_URL = (
+		"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+		f"{SHERPA_MODEL}.tar.bz2"
+	)
 
-		if not os.path.isdir(whisper_dir):
-			print("lib/whisper not found - skipping model download.")
+	def setup_sherpa_models(self) -> None:
+		"""Download the Nemotron streaming transducer into lib/sherpa_onnx/models/.
+
+		This is a ~630MB download and will take a while on first run. The
+		path must match SpeechToText.MODEL_DIR in speech_to_text.py.
+		"""
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		models_dir = os.path.join(script_dir, "lib", "sherpa_onnx", "models")
+		model_dir  = os.path.join(models_dir, self.SHERPA_MODEL)
+
+		# Check for an actual model file, not just the directory — a download
+		# interrupted mid-extract leaves the directory behind and would
+		# otherwise be treated as a completed install.
+		if os.path.exists(os.path.join(model_dir, "encoder.int8.onnx")):
+			print(f"Sherpa model {self.SHERPA_MODEL} already present, skipping.")
 			return
 
-		for model in ["tiny.en", "base.en"]:
-			model_file = os.path.join(models_dir, f"ggml-{model}.bin")
-			if os.path.exists(model_file):
-				print(f"Model {model} already present, skipping.")
-				continue
-			print(f"Downloading whisper model: {model}")
-			try:
-				subprocess.check_call(
-					["bash", download_script, model],
-					cwd=whisper_dir
-				)
-			except subprocess.CalledProcessError as e:
-				print(f"Failed to download whisper model {model}: {e}")
-				sys.exit(1)
+		os.makedirs(models_dir, exist_ok=True)
+		archive = os.path.join(models_dir, f"{self.SHERPA_MODEL}.tar.bz2")
+		print(f"Downloading sherpa-onnx model: {self.SHERPA_MODEL} (~630MB)")
+		try:
+			subprocess.check_call(["wget", "-O", archive, self.SHERPA_MODEL_URL])
+			subprocess.check_call(["tar", "xf", archive, "-C", models_dir])
+		except subprocess.CalledProcessError as e:
+			print(f"Failed to set up sherpa-onnx model: {e}")
+			sys.exit(1)
+		finally:
+			if os.path.exists(archive):
+				os.remove(archive)
+
+		print(f"Sherpa model installed to {model_dir}.")
 
 	def setup_openwakeword_models(self) -> None:
 		"""Download openWakeWord base models and install custom hey_kermit model."""
@@ -116,15 +142,21 @@ class Setup:
 			print(f"Failed to download openWakeWord models: {e}")
 			sys.exit(1)
 
-		# Copy custom hey_kermit model into the openwakeword resources folder
+		# Copy the custom wakeword model into the openwakeword resources folder.
+		# Note: wakeword_detection.py loads this by absolute path from
+		# lib/openwakeword/ (see kermit.json), so this copy is belt-and-braces
+		# rather than required. The filename is okay_ker_mit.onnx — the old
+		# hey_ker_mit.onnx name here never matched what ships in the repo, so
+		# this step printed a WARNING on every run.
 		script_dir = os.path.dirname(os.path.abspath(__file__))
-		src = os.path.join(script_dir, "lib", "openwakeword", "hey_ker_mit.onnx")
-		dst = "/usr/local/lib/python3.10/dist-packages/openwakeword/resources/models/hey_ker_mit.onnx"
+		model_name = "okay_ker_mit.onnx"
+		src = os.path.join(script_dir, "lib", "openwakeword", model_name)
+		dst = f"/usr/local/lib/python3.10/dist-packages/openwakeword/resources/models/{model_name}"
 		if os.path.exists(src):
 			subprocess.check_call(["sudo", "cp", src, dst])
-			print("hey_ker_mit.onnx installed to openwakeword models folder.")
+			print(f"{model_name} installed to openwakeword models folder.")
 		else:
-			print("WARNING: hey_ker_mit.onnx not found in lib/openwakeword/ — copy it there manually.")
+			print(f"WARNING: {model_name} not found in lib/openwakeword/ — copy it there manually.")
 
 	def setup_respeaker(self) -> None:
 		"""Clone ReSpeaker XVF3800 host control tools into lib/respeaker/."""
@@ -201,6 +233,11 @@ class Setup:
 	def setup_bashrc(self) -> None:
 		"""Add required environment variables to ~/.bashrc if not already present."""
 		bashrc = os.path.expanduser("~/.bashrc")
+		# The CUDA exports were needed by the whisper.cpp GPU build. sherpa-onnx
+		# runs the int8 model on CPU (quantized ops don't map to the CUDA
+		# execution provider), so nothing in the STT path needs these now.
+		# They're kept because they're harmless and other tooling may rely on
+		# them; safe to drop if you confirm nothing else does.
 		exports = [
 			"export PATH=/usr/local/cuda/bin:$PATH",
 			"export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH",

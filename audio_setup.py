@@ -22,8 +22,12 @@ can shift between boots; plughw: also gives us free sample-rate conversion so
 22.05k/24k TTS output plays fine over the 48k I2S link.
 """
 
+import io
 import os
 import subprocess
+import threading
+import time
+import wave
 from typing import Optional
 
 # ALSA control name for the AHUB crossbar mux feeding the header I2S port.
@@ -31,6 +35,87 @@ from typing import Optional
 _I2S_MUX_CONTROL = "I2S2 Mux"
 _I2S_MUX_SOURCE = "ADMAIF1"
 _APE_CARD_NAME = "APE"
+
+# --- DAC wake state ---------------------------------------------------------
+# The PCM5102 drops its output stage when the I2S link goes idle, so the first
+# fraction of a second after a silent gap gets swallowed. The fix is to push a
+# brief inaudible tone through first and let the DAC settle before real audio
+# starts.
+#
+# This state lives here rather than on VoicePlayer or ShowPlayer because there
+# is only ONE DAC. If each player tracked its own idle time they would never
+# see each other's playback, and a show starting straight after Kermit speaks
+# would fire a redundant wake tone — 150ms of dead air before every show that
+# follows a spoken line, which is the common case.
+_dac_lock = threading.Lock()
+_last_play_time: float = 0.0
+
+# Seconds of silence after which the DAC is assumed to have dropped out.
+DAC_WAKE_THRESHOLD = 2.0
+# Duration and frequency of the wake tone. 80Hz at 4% amplitude is below the
+# threshold of notice through the puppet's speaker but is enough signal to
+# bring the output stage up.
+_WAKE_SECONDS = 0.15
+_WAKE_HZ = 80
+_WAKE_AMPLITUDE = 0.04
+# Must match pygame.mixer.pre_init() in start.py.
+_WAKE_RATE = 44100
+
+
+def _build_wake_tone() -> io.BytesIO:
+	"""Generate the wake tone as an in-memory WAV.
+
+	Written with the stdlib wave module rather than scipy so that importing
+	audio_setup stays cheap — start.py imports it before the mixer exists.
+	"""
+	import numpy as np
+
+	samples = int(_WAKE_RATE * _WAKE_SECONDS)
+	t = np.linspace(0, _WAKE_SECONDS, samples, endpoint=False)
+	tone = (np.sin(2 * np.pi * _WAKE_HZ * t) * 32767 * _WAKE_AMPLITUDE).astype(np.int16)
+	stereo = np.column_stack([tone, tone])
+
+	buf = io.BytesIO()
+	with wave.open(buf, "wb") as wf:
+		wf.setnchannels(2)
+		wf.setsampwidth(2)
+		wf.setframerate(_WAKE_RATE)
+		wf.writeframes(stereo.tobytes())
+	buf.seek(0)
+	return buf
+
+
+def wake_dac_if_needed(pygame_instance) -> None:
+	"""Wake the DAC if it has been idle long enough to have dropped out.
+
+	Call this immediately before starting playback, and call note_playback()
+	when that playback finishes. Blocks for ~150ms when a wake is actually
+	needed and returns immediately otherwise.
+
+	Note for timed shows: this deliberately plays a SEPARATE tone rather than
+	padding the show audio itself. ShowPlayer drives its animation events off
+	mixer.music.get_pos(), so prepending silence to the audio stream would
+	shift every event later by that amount.
+	"""
+	global _last_play_time
+	with _dac_lock:
+		idle = time.monotonic() - _last_play_time
+		if idle > DAC_WAKE_THRESHOLD:
+			try:
+				pygame_instance.mixer.Sound(_build_wake_tone()).play()
+				# Let the tone finish before the caller loads real audio,
+				# otherwise the two overlap and the wake is wasted.
+				time.sleep(_WAKE_SECONDS + 0.01)
+			except Exception as e:
+				print(f"Audio: DAC wake failed (continuing anyway): {e}")
+		_last_play_time = time.monotonic()
+
+
+def note_playback() -> None:
+	"""Record that audio just finished, so the next caller can judge idle time."""
+	global _last_play_time
+	with _dac_lock:
+		_last_play_time = time.monotonic()
 
 # Playback device string. plughw (not hw) so ALSA converts sample rate/format
 # from whatever the source is up to what the I2S link runs.

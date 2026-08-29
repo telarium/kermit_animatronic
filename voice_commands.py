@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import random
+import re
 from rapidfuzz import process, fuzz
 from pydispatch import dispatcher
 
@@ -70,6 +71,54 @@ class VoiceCommandHandler:
 
 	CONFIDENCE_THRESHOLD = 80
 
+	# Song titles are matched with a separate, lower threshold. Show names come
+	# from filename stems that carry material the speaker never says (artist,
+	# track number), so scores run lower than for the fixed intent phrases
+	# above even when the match is obviously correct.
+	SHOW_CONFIDENCE_THRESHOLD = 72
+
+	# "Artist - Title" / "Title - Artist" separator. Matches a hyphen, en dash
+	# or em dash that is surrounded by whitespace, so hyphenated words inside a
+	# title ("Spider-Man") are left intact.
+	_ARTIST_SPLIT = re.compile(r"\s+[-–—]\s+")
+
+	# Leading track numbers: "01 - Title", "03. Title", "7 Title".
+	_TRACK_PREFIX = re.compile(r"^\s*\d{1,3}\s*[-–—._)]*\s+")
+
+	# Filler the speaker adds that never appears in a filename.
+	_QUERY_FILLER = re.compile(r"^(the |a |some )?(song|tune|track) (called |named )?")
+
+	@staticmethod
+	def _normalize(text: str) -> str:
+		"""Fold a title or query into comparable form.
+
+		Speech-to-text writes what was said ("and"), filenames write what was
+		typed ("&"). Punctuation, casing and apostrophes differ freely between
+		the two and carry no meaning for matching, so strip all of it.
+		"""
+		text = text.lower()
+		text = text.replace("&", " and ").replace("+", " and ")
+		text = re.sub(r"[^a-z0-9]+", " ", text)
+		return re.sub(r"\s+", " ", text).strip()
+
+	@classmethod
+	def _show_keys(cls, show_name: str) -> set:
+		"""Every normalized string that should match this show.
+
+		A stem like "Gin & Juice - Snoop Frogg" yields the whole thing plus
+		each side of the separator, so "gin and juice" scores against the
+		title alone instead of being diluted by an artist name the speaker
+		never said. Both sides are indexed because filenames use both
+		"Artist - Title" and "Title - Artist" conventions and we can't tell
+		which from the name.
+		"""
+		stem = cls._TRACK_PREFIX.sub("", show_name)
+		keys = {cls._normalize(stem)}
+		parts = cls._ARTIST_SPLIT.split(stem)
+		if len(parts) > 1:
+			keys.update(cls._normalize(p) for p in parts)
+		return {k for k in keys if k}
+
 	def __init__(self, wifi_management, show_player) -> None:
 		self._wifi_management = wifi_management
 		self._show_player = show_player
@@ -80,6 +129,15 @@ class VoiceCommandHandler:
 		]
 		self._sorted_prefixes = sorted(self.PLAY_BY_NAME_PREFIXES, key=len, reverse=True)
 		self._sorted_connect_prefixes = sorted(self.CONNECT_WIFI_PREFIXES, key=len, reverse=True)
+		# Lazily built index of (normalized key -> original show stem). Rebuilt
+		# whenever show_list changes, since inserting a USB stick adds shows at
+		# runtime. _resolve_show needs the ORIGINAL stem back to find the file,
+		# so the index maps to it rather than to the normalized form.
+		self._show_index: list = []
+		self._show_index_source: tuple = ()
+		self._normalized_blocklist = {
+			self._normalize(p) for p in self.PLAY_BY_NAME_BLOCKLIST
+		}
 		print("VoiceCommandHandler: initialized.")
 
 	def parse(self, transcript: str) -> bool:
@@ -121,7 +179,10 @@ class VoiceCommandHandler:
 		for prefix in self._sorted_prefixes:
 			if text.startswith(prefix + " ") or text == prefix:
 				remainder = text[len(prefix):].strip()
-				if remainder and remainder not in self.PLAY_BY_NAME_BLOCKLIST:
+				# Compare against the blocklist normalized, so trailing
+				# punctuation from the transcript ("play something.") doesn't
+				# sneak a generic phrase through as a song title.
+				if remainder and self._normalize(remainder) not in self._normalized_blocklist:
 					return remainder
 		return None
 
@@ -182,6 +243,20 @@ class VoiceCommandHandler:
 		print(f"VoiceCommandHandler: randomly selected show '{show_name}'")
 		dispatcher.send(signal='showStatus', status='play', show_name=show_name)
 
+	def _get_show_index(self, show_list: list) -> list:
+		"""Return [(normalized_key, show_stem), ...], rebuilding if stale."""
+		source = tuple(show_list)
+		if source != self._show_index_source:
+			index = []
+			for show in show_list:
+				for key in self._show_keys(show):
+					index.append((key, show))
+			self._show_index = index
+			self._show_index_source = source
+			print(f"VoiceCommandHandler: indexed {len(show_list)} shows "
+			      f"as {len(index)} match keys.")
+		return self._show_index
+
 	def _handle_play_by_name(self, song_name: str) -> bool:
 		"""
 		Fuzzy-match song_name against the available show list.
@@ -192,15 +267,54 @@ class VoiceCommandHandler:
 			print("VoiceCommandHandler: no shows available.")
 			return False
 
-		match = process.extractOne(song_name, show_list, scorer=fuzz.ratio)
-		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
-			matched_show = match[0]
-			print(f"VoiceCommandHandler: play by name — '{song_name}' matched '{matched_show}' (score={match[1]})")
-			dispatcher.send(signal='showStatus', status='play', show_name=matched_show)
-			return True
+		query = self._normalize(self._QUERY_FILLER.sub("", song_name))
+		if not query:
+			return False
 
-		print(f"VoiceCommandHandler: play by name — no confident match for '{song_name}' (best score={match[1] if match else 0})")
-		return False
+		index = self._get_show_index(show_list)
+		keys = [k for k, _ in index]
+
+		# WRatio rather than ratio: it also considers partial and token-set
+		# similarity, and applies a length penalty so a single shared word out
+		# of a long title doesn't score as a full match. Plain ratio compares
+		# whole strings, which is why "gin and juice" lost against the stem
+		# "Gin & Juice - Snoop Frogg" — the artist half it never heard counted
+		# against it.
+		results = process.extract(query, keys, scorer=fuzz.WRatio, limit=5)
+		if not results:
+			return False
+
+		# Collapse to the best score per show — one show contributes several
+		# keys, and we don't want the same title occupying every slot.
+		best_per_show: dict = {}
+		for key, score, idx in results:
+			show = index[idx][1]
+			if score > best_per_show.get(show, (0, ""))[0]:
+				best_per_show[show] = (score, key)
+
+		ranked = sorted(best_per_show.items(), key=lambda kv: kv[1][0], reverse=True)
+		matched_show, (best_score, matched_key) = ranked[0]
+
+		if best_score < self.SHOW_CONFIDENCE_THRESHOLD:
+			print(f"VoiceCommandHandler: play by name — no confident match for "
+			      f"'{song_name}' (normalized '{query}', best='{matched_key}' "
+			      f"score={best_score:.1f})")
+			return False
+
+		# Log the runner-up too. A near-tie means two titles share vocabulary,
+		# which is the failure mode worth seeing in the logs before a guest
+		# hears the wrong song.
+		if len(ranked) > 1:
+			runner_up, (runner_score, _) = ranked[1]
+			print(f"VoiceCommandHandler: play by name — '{song_name}' matched "
+			      f"'{matched_show}' via '{matched_key}' (score={best_score:.1f}; "
+			      f"next best '{runner_up}' at {runner_score:.1f})")
+		else:
+			print(f"VoiceCommandHandler: play by name — '{song_name}' matched "
+			      f"'{matched_show}' via '{matched_key}' (score={best_score:.1f})")
+
+		dispatcher.send(signal='showStatus', status='play', show_name=matched_show)
+		return True
 
 	def _handle_connect_wifi(self, ssid: str) -> None:
 		print(f"VoiceCommandHandler: connect to wifi requested for '{ssid}'")

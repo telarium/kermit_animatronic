@@ -9,6 +9,7 @@ import io
 import json
 import os
 import threading
+import audio_setup
 from typing import List, Optional, Any
 
 USB_VOICES_DIR = "/mnt/usb/voices"
@@ -130,8 +131,6 @@ class VoicePlayer:
 
 		self._stop_event = threading.Event()
 		self._thread: Optional[threading.Thread] = None
-		self._last_play_time: float = 0.0
-		self._dac_wake_threshold: float = 2.0  # seconds of idle before DAC needs waking
 
 		self._local_voices_dir = voices_dir
 
@@ -232,18 +231,13 @@ class VoicePlayer:
 		return None
 
 	def _wake_dac_if_needed(self) -> None:
-		"""Play a brief tone to wake the DAC if it has been idle too long."""
-		if time.monotonic() - self._last_play_time > self._dac_wake_threshold:
-			samples = int(44100 * 0.15)  # 150ms
-			t = np.linspace(0, 0.15, samples, endpoint=False)
-			tone = (np.sin(2 * np.pi * 80 * t) * 32767 * 0.04).astype(np.int16)
-			stereo = np.column_stack([tone, tone])
-			buf = io.BytesIO()
-			wavfile.write(buf, 44100, stereo)
-			buf.seek(0)
-			self.pygame.mixer.Sound(buf).play()
-			time.sleep(0.16)
-		self._last_play_time = time.monotonic()
+		"""Wake the DAC if it has been idle too long.
+
+		Delegates to audio_setup so VoicePlayer and ShowPlayer share one idle
+		timer — there is only one DAC, and two independent timers meant each
+		player fired a redundant wake tone after the other had just played.
+		"""
+		audio_setup.wake_dac_if_needed(self.pygame)
 
 	def _play_sequence_worker(self, filenames: List[str]) -> None:
 		print(f"VoicePlayer: worker started, {len(filenames)} file(s)")
@@ -324,7 +318,7 @@ class VoicePlayer:
 				break
 			time.sleep(0.01)
 
-		self._last_play_time = time.monotonic()
+		audio_setup.note_playback()
 
 	def _load_audio_data(self, file_path: str):
 		"""Load audio data and sample rate from mp3, ogg, or wav."""
