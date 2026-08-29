@@ -106,7 +106,7 @@ class ShowPlayer:
 						found.append(base)
 				elif f.lower().endswith(audio_extensions):
 					base = os.path.splitext(f)[0]
-					if (base + '.mid') in files_lower and base not in found:
+					if (base.lower() + '.mid') in files_lower and base not in found:
 						found.append(base)
 
 		self.show_list = found
