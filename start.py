@@ -63,6 +63,7 @@ from voice_commands import VoiceCommandHandler
 from llm_service import LLM
 from voice_player import VoicePlayer
 from animation_controller import AnimationController
+from led_controller import LEDController
 from animatronic_movements import Movement
 from show_player import ShowPlayer
 from wifi_management import WifiManagement
@@ -132,6 +133,7 @@ class Kermit:
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir, hardware_path=hardware_path)
 		self.animation_controller = AnimationController(animation_dir=animation_dir)
+		self.led_controller = LEDController(hardware_path)
 		self.movements = Movement(hardware_path)
 		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
@@ -146,6 +148,8 @@ class Kermit:
 		# Handle SIGINT and SIGTERM for graceful shutdown
 		signal.signal(signal.SIGINT, self.shutdown)
 		signal.signal(signal.SIGTERM, self.shutdown)
+
+		self.led_controller.set_state(LEDController.STATE_OFF)
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
@@ -306,12 +310,17 @@ class Kermit:
 		self.web_server.broadcast('showStatusUpdated', status)
 		if status == "play":
 			self.show_player.load_show(show_name)
+			self.wakeword.set_enabled(False)
 		elif status == "pause":
 			self.show_player.toggle_pause()
+			self.wakeword.set_enabled(True)
 		elif status == "stop":
 			self.show_player.stop_show()
+			self.movements.reset_all()
+			self.wakeword.set_enabled(True)
 		elif status == "end":
 			self.wakeword.set_enabled(True)
+			self.movements.reset_all()
 
 	def on_connect_event(self, client_ip: str) -> None:
 		print(f"Web client connected from IP: {client_ip}")
@@ -334,6 +343,9 @@ class Kermit:
 		self.web_server.broadcast('movementKeyActivated', {"key": str(key).lower(), "on": bool(on)})
 
 	def on_wakeword_event(self) -> None:
+		# Set outside the thread so the ring responds immediately rather than
+		# after wait_until_stopped.
+		self.led_controller.set_state(LEDController.STATE_LISTENING)
 		def handle():
 			self.show_player.stop_show()
 			dispatcher.send(signal="animationStart", name="wakeword")
@@ -348,6 +360,8 @@ class Kermit:
 				self._awaiting_followup = False
 			self.wakeword.set_enabled(True)
 			dispatcher.send(signal="animationStop")
+			self.led_controller.set_state(LEDController.STATE_OFF)
+			self.movements.reset_all()
 			return
 		print(f"Heard: {text}")
 		if self._awaiting_followup or not self.voiceCommandHandler.parse(text):
@@ -355,9 +369,14 @@ class Kermit:
 			self.llm.send(text)
 			self.wakeword.set_enabled(False)
 			dispatcher.send(signal="animationStart", name="thinking", bStartAtRandomTime=False, bLoop=True)
+			self.led_controller.set_state(LEDController.STATE_THINKING)
 		else:
+			# Handled locally. If it plays audio the LEDs are picked up again
+			# by on_voice_playback_event; if it plays nothing, this is the end.
 			dispatcher.send(signal="animationStop")
+			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.wakeword.set_enabled(True)
+			self.movements.reset_all()
 
 	def on_execute_text_to_speech(self, text: str) -> None:
 		if text.endswith("[?]"):
@@ -377,10 +396,13 @@ class Kermit:
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
+			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.wakeword.set_enabled(False)
 		else:
 			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
 			if self._awaiting_followup:
+				# Straight back to listening rather than idle.
+				self.led_controller.set_state(LEDController.STATE_LISTENING)
 				def delayed_listen():
 					dispatcher.send(signal="animationStart", name="wakeword")
 					time.sleep(0.5)
@@ -389,6 +411,7 @@ class Kermit:
 				threading.Thread(target=delayed_listen, daemon=True).start()
 			else:
 				dispatcher.send(signal="animationStop")
+				self.led_controller.set_state(LEDController.STATE_OFF)
 				self.wakeword.set_enabled(True)
 
 	def on_update_status(self, id: str, value: any = None) -> None:
