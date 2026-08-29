@@ -47,16 +47,7 @@ class Movement:
 
 		self._load_movements(config_path)
 
-		for movement in self.all:
-			movement.key_is_pressed = False
-			val = 1 if movement.inverted else 0
-			movement.pin1_time = 0
-
-			if movement.output_pin1:
-				self.set_pin(movement.output_pin1, val, movement)
-				if movement.output_pin2:
-					movement.pin2_time = 0
-					self.set_pin(movement.output_pin2, 1 - val, movement)
+		self.reset_all()
 
 		dispatcher.connect(self.on_key_event, signal='keyEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_midi_event, signal='onMidiEvent', sender=dispatcher.Any)
@@ -124,6 +115,30 @@ class Movement:
 						movement.pin2_time = 0
 						self.set_pin(movement.output_pin2, 0, movement)
 
+	def reset_all(self, b_notify: bool = False) -> None:
+		"""Drive every movement back to its default (off) position and clear
+		its state. 'Off' respects the movement's `inverted` flag, so a movement
+		whose resting position needs the pin held high is set high here.
+
+		Called at startup, and safe to call any time playback is interrupted
+		to make sure nothing is left energised or half-posed. Pass
+		b_notify=True to also emit onMovementKeyActivated for anything that
+		was active, so the web UI keypad clears with it."""
+		for movement in self.all:
+			was_pressed = movement.key_is_pressed
+			movement.key_is_pressed = False
+			val = 1 if movement.inverted else 0
+			movement.pin1_time = 0
+
+			if movement.output_pin1:
+				self.set_pin(movement.output_pin1, val, movement)
+				if movement.output_pin2:
+					movement.pin2_time = 0
+					self.set_pin(movement.output_pin2, 1 - val, movement)
+
+			if b_notify and was_pressed and movement.key:
+				dispatcher.send(signal="onMovementKeyActivated", key=movement.key, on=False)
+
 	def set_pin(self, pin: List[Any], val: int, movement: MovementStruct) -> None:
 		self.gpio.set_pin_from_address(pin[0], pin[1], val)
 
@@ -131,6 +146,9 @@ class Movement:
 		b_do_callback = False
 		for movement in self.all:
 			if movement.key == key and key:
+				#print(movement.description)
+				#print(val)
+				#print(key)
 				if val == 1 and not movement.key_is_pressed:
 					movement.key_is_pressed = True
 					b_do_callback = True
