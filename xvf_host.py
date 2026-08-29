@@ -186,7 +186,7 @@ class ReSpeaker:
             for i in range(data_cnt):
                 payload += struct.pack(b'i', data_list[i])
         
-        print("WriteCMD: cmdid: {}, resid: {}, payload: {}".format(wvalue, windex, payload))
+        #print("WriteCMD: cmdid: {}, resid: {}, payload: {}".format(wvalue, windex, payload))
 
         self.dev.ctrl_transfer(
             usb.util.CTRL_OUT | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
