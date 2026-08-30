@@ -192,9 +192,7 @@ class ShowPlayer:
 		finally:
 			self.pygame.mixer.music.stop()
 			self.paused = False
-			# Stamp the END of the show, not the start — a three-minute show
-			# would otherwise look like three minutes of idle time to whatever
-			# plays next.
+			# Stamp the END of the show, not the start
 			audio_setup.note_playback()
 			if not self._stop_event.is_set():
 				# Natural end — notify the rest of the system.
@@ -216,10 +214,10 @@ class ShowPlayer:
 
 	def _dispatch_single(self, key: int, value: int) -> None:
 		if self.show_type == ShowType.MIDI:
-			print(f"ShowPlayer: MIDI note={key} val={value}")
+			#print(f"ShowPlayer: MIDI note={key} val={value}")
 			dispatcher.send(signal="onMidiEvent", midi_note=key, val=value)
 		elif self.show_type == ShowType.PROGRAM_BLUE:
-			print(f"ShowPlayer: PB channel={key} val={value}")
+			#print(f"ShowPlayer: PB channel={key} val={value}")
 			dispatcher.send(signal="onProgramBlueEvent", channel=key, val=value)
 
 	def _stop_playback(self) -> None:
