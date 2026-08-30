@@ -18,6 +18,9 @@ class ShowType(Enum):
 
 
 class ShowPlayer:
+	# Music playback level, 0.0-1.0.
+	SHOW_VOLUME = 0.8
+
 	def __init__(self, pygame_instance) -> None:
 		self.pygame = pygame_instance
 
@@ -165,8 +168,13 @@ class ShowPlayer:
 			audio_setup.wake_dac_if_needed(self.pygame)
 
 			self.pygame.mixer.music.load(audio_path)
+			# mixer.music is a single global channel shared with VoicePlayer,
+			# and its volume persists across load(). Set it every time rather
+			# than once at init, or whichever component played last decides
+			# the level for the next one.
+			self.pygame.mixer.music.set_volume(self.SHOW_VOLUME)
 			self.pygame.mixer.music.play()
-			print(f"ShowPlayer: playing '{audio_path}'")
+			print(f"ShowPlayer: playing '{audio_path}' at {self.SHOW_VOLUME:.0%} volume")
 
 			while not self._stop_event.is_set():
 				if not self.pygame.mixer.music.get_busy() and not self.paused:
