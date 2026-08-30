@@ -281,6 +281,9 @@ class Kermit:
 			if self.stt:
 				self.stt.shutdown()
 
+			# Close the shared capture stream so arecord doesn't outlive us.
+			audio_setup.stop_mic()
+
 			for thread in threading.enumerate():
 				if thread is not threading.main_thread():
 					if thread.is_alive():
@@ -350,7 +353,7 @@ class Kermit:
 			self.show_player.stop_show()
 			dispatcher.send(signal="animationStart", name="wakeword")
 			if not self.wakeword.wait_until_stopped(timeout=4.0):
-				print("WakeWord: timed out waiting for stream to close, proceeding anyway.")
+				print("WakeWord: timed out waiting for listen loop to exit, proceeding anyway.")
 			self.stt.listen_once()
 		threading.Thread(target=handle, daemon=True).start()
 
@@ -396,15 +399,18 @@ class Kermit:
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
+			audio_setup.set_mic_muted(True)
 			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.wakeword.set_enabled(False)
 		else:
+			audio_setup.set_mic_muted(False)
 			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
 			if self._awaiting_followup:
 				# Straight back to listening rather than idle.
 				self.led_controller.set_state(LEDController.STATE_LISTENING)
 				def delayed_listen():
 					dispatcher.send(signal="animationStart", name="wakeword")
+					audio_setup.set_mic_anchor()
 					time.sleep(0.5)
 					print("Kermit: awaiting follow-up response, listening...")
 					self.stt.listen_once()
