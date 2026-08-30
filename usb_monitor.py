@@ -31,7 +31,14 @@ def init_respeaker() -> None:
 	try:
 		script_dir = os.path.dirname(os.path.abspath(__file__))
 		xvf_py = os.path.join(script_dir, "lib", "respeaker", "python_control", "xvf_host.py")
-		subprocess.run(["python3", xvf_py, "REBOOT", "--values", "1"], check=True)
+		# timeout is essential: if something else holds the ReSpeaker's USB
+		# control interface (e.g. a stray arecord from a previous run), this
+		# call blocks forever and startup never gets past this line. Failing
+		# here is recoverable; hanging is not.
+		subprocess.run(
+			["python3", xvf_py, "REBOOT", "--values", "1"],
+			check=True, timeout=30,
+		)
 		print("ReSpeaker: rebooting...")
 
 		# Wait for device to re-enumerate
