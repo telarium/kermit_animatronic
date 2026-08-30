@@ -7,22 +7,13 @@ from pydispatch import dispatcher
 class VoiceCommandHandler:
 
 	INTENTS = {
-		"look_left": [
-			"look left", "turn left", "move left", "face left", "go left", "rotate left",
-		],
-		"look_right": [
-			"look right", "turn right", "move right", "face right", "go right", "rotate right",
-		],
-		"look_up": [
-			"look up", "turn up", "move up", "face up", "go up", "look upward", "glance up",
-		],
-		"look_down": [
-			"look down", "turn down", "move down", "face down", "go down", "look downward", "glance down",
-		],
 		"sing": [
 			"sing a song", "sing for me", "play something", "play music", "sing music",
 			"entertain me", "hit it", "sing something", "play something for me",
-			"give me a song", "do a song", "let's hear some music",
+			"give me a song", "do a song", "let's hear some music", "singh", "clay"
+		],
+		"stop": [
+			"stop", "stop music", "stop please", "stop singing", "be quiet", "that's enough",
 		],
 		"get_ip": [
 			"what's your wifi address", "what is your wifi address",
@@ -205,6 +196,7 @@ class VoiceCommandHandler:
 			"look_up":          self._handle_look_up,
 			"look_down":        self._handle_look_down,
 			"sing":             self._handle_sing,
+			"stop":				self._handle_stop,
 			"get_ip":           self._handle_get_ip,
 			"get_wifi_network": self._handle_get_wifi_network,
 			"who_are_you":      self._handle_who_are_you,
@@ -242,6 +234,10 @@ class VoiceCommandHandler:
 		show_name = random.choice(show_list)
 		print(f"VoiceCommandHandler: randomly selected show '{show_name}'")
 		dispatcher.send(signal='showStatus', status='play', show_name=show_name)
+
+	def _handle_stop(self) -> None:
+		print("VoiceCommandHandler: stop")
+		dispatcher.send(signal='showStatus', status='stop')
 
 	def _get_show_index(self, show_list: list) -> list:
 		"""Return [(normalized_key, show_stem), ...], rebuilding if stale."""
