@@ -114,6 +114,8 @@ class _SyncChannel:
 
 
 class VoicePlayer:
+	VOICE_VOLUME = 1.0
+
 	def __init__(
 		self,
 		pygame_instance: Any,
@@ -283,6 +285,7 @@ class VoicePlayer:
 		buf.seek(0)
 
 		self.pygame.mixer.music.load(buf)
+		self.pygame.mixer.music.set_volume(self.VOICE_VOLUME)
 		self.pygame.mixer.music.play()
 
 		for ch in self.channels:
