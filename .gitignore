@@ -209,12 +209,23 @@ __marimo__/
 en_US-ryan-low.json
 en_US-ryan-low.onnx
 
-lib/respeaker/
 
-# Kermit - whisper binary exceptions
+# =============================================================================
+# Kermit - lib/ exceptions
+# =============================================================================
+# The Python packaging block above ignores "lib/" (line 17). Git will NOT
+# descend into an excluded directory, so every "!lib/..." rule below is dead
+# unless lib/ itself is re-included FIRST. This one line is what makes the
+# rest of this section work — deleting it silently breaks all of them.
+!lib/
+
+# Re-including lib/ does not re-include its contents. Everything under it is
+# still ignored unless explicitly negated below, so the big vendored trees
+# stay out of git on their own rules.
+lib/respeaker/
 lib/sherpa_onnx/
 
-# Kermit - pl2303 kernel module (keep source, ignore build artifacts)
+# pl2303 kernel module (keep source, ignore build artifacts)
 !lib/pl2303/
 !lib/pl2303/src/
 !lib/pl2303/src/pl2303.c
@@ -228,9 +239,16 @@ lib/pl2303/src/*.mod.o
 lib/pl2303/src/Module.symvers
 lib/pl2303/src/modules.order
 
-# Kermit - f_midi kernel module (pre-built binary, no source)
+# f_midi kernel module (pre-built binary, no source)
 !lib/f_midi/
 !lib/f_midi/usb_f_midi.ko
+
+# Offline Piper TTS voice — fallback for when ElevenLabs is unavailable.
+# One negation per directory level, since git checks each level in turn.
+!lib/piper/
+!lib/piper/kermit/
+!lib/piper/kermit/*.onnx
+!lib/piper/kermit/*.onnx.json
 
 config.cfg
 shows/
