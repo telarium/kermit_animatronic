@@ -3,6 +3,11 @@
 		"model": "lib/openwakeword/okay_ker_mit.onnx",
 		"description": "Okay Kermit"
 	},
+	"piper": {
+		"directory": "lib/piper/kermit/",
+		"speed": 1.4,
+		"volume": 0.7
+	},
 	"voice_directory": "voices/kermit/",
 	"animation_directory": "animations/kermit/",
 	"html": {
