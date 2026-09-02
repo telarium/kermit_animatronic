@@ -129,7 +129,7 @@ class Kermit:
 		# Initialize components
 		self.wakeword = WakeWord(model_path=wakeword_model, description=wakeword_desc)
 		self.stt = SpeechToText()
-		self.tts = TextToSpeech()
+		self.tts = TextToSpeech(hardware_path)
 		self.llm = LLM()
 		self.voice_player = VoicePlayer(pygame, voices_dir=voices_dir, hardware_path=hardware_path)
 		self.animation_controller = AnimationController(animation_dir=animation_dir)
@@ -381,14 +381,15 @@ class Kermit:
 			self.wakeword.set_enabled(True)
 			self.movements.reset_all()
 
-	def on_execute_text_to_speech(self, text: str) -> None:
+	def on_execute_text_to_speech(self, text: str, bForceOffline: bool = False) -> None:
+		"""bForceOffline bypasses ElevenLabs and speaks with the Piper voice."""
 		if text.endswith("[?]"):
 			self._awaiting_followup = True
 			text = text[:-4].strip()
 		else:
 			self._awaiting_followup = False
 		print(f"Response: {text}")
-		self.tts.speak(text)
+		self.tts.speak(text, bForceOffline)
 
 	def on_voice_play(self, file: str) -> None:
 		dispatcher.send(signal="animationStart", name="speaking", bStartAtRandomTime=True, bLoop=True)
