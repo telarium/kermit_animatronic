@@ -27,6 +27,11 @@ class LLM:
 		" When in doubt, accept the answer and move on enthusiastically."
 		" If the user's message is [SILENCE], respond as if they didn't answer —"
 		" gently prompt them again or move on naturally."
+		" Write plain spoken text only. Use letters, numbers, and ordinary sentence"
+		" punctuation — periods, commas, question marks, exclamation points, apostrophes,"
+		" and hyphens. Apart from the [?] marker described above, never use asterisks,"
+		" ampersands, brackets, quotation marks, emoji, markdown, or any other symbol."
+		" Spell symbols out as words instead: 'and' rather than '&', 'percent' rather than '%'."
 	)
 
 	def __init__(self) -> None:
