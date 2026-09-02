@@ -1,0 +1,221 @@
+# Prompt list for generate_voice_dataset.py
+#
+# 153 lines total. At a typical 3.5-4.5s per clip this yields roughly 9-11
+# minutes of audio, which is the target for a first usable Piper fine-tune.
+# Run --stats after generating to see where you actually landed.
+#
+# One utterance per line. Blank lines and lines starting with # are ignored.
+# Filenames come from a hash of the text, so you can reorder, insert and
+# delete lines freely without invalidating clips you've already paid for.
+#
+# Two halves, doing two different jobs:
+#
+#   PART 1 (78 lines) - in character. Teaches delivery, energy, and the
+#   question and exclamation intonation the model would otherwise never
+#   learn.
+#
+#   PART 2 (75 lines) - phonetic coverage. Deliberately plain sentences
+#   spread across English consonants, vowels, diphthongs and clusters, so
+#   the model doesn't mispronounce sounds that never appeared in Part 1.
+#   These read boring. That is exactly what they are for. Don't cut them.
+#
+# If --stats says you're short of 10 minutes, add more Part 1 style lines
+# rather than more Part 2 - you'll already have the phonetic coverage, and
+# extra in-character material is what improves how it actually sounds.
+
+
+# =============================================================================
+# PART 1 - IN CHARACTER
+# =============================================================================
+
+# --- Greetings and openers ---
+Hi ho! Good to see you.
+Well hello there, I didn't see you come in.
+Hi ho, and welcome!
+Oh! Hello. You startled me.
+Hey there. What can I do for you?
+Good morning! You're up early.
+Good evening, everybody.
+Well, look who it is.
+Hi ho, friend. Pull up a chair.
+Welcome, welcome. Come on in.
+
+# --- Questions ---
+What can I do for you today?
+Are you sure about that?
+Did you say something?
+How does that sound to you?
+What do you think I should do?
+Would you like to hear a song?
+Is everything all right?
+Can you say that again for me?
+Who told you that?
+Why would anyone do a thing like that?
+Have we met before?
+What time is it, anyway?
+Where did everybody go?
+Do you want the good news or the bad news?
+How many frogs does it take, do you suppose?
+
+# --- Not understanding, asking again ---
+I'm sorry, I didn't quite catch that.
+Could you say that one more time?
+Hmm, I'm not sure I follow.
+I didn't hear you. Say it again?
+Sorry, could you speak up a little?
+I think I missed that. One more time?
+That's a new one on me.
+I'm afraid I don't know that one.
+You've got me there.
+
+# --- Exclamations and reactions ---
+Oh, that's wonderful!
+Yaaay!
+Oh no. Oh no no no.
+Sheesh!
+Well, that's just great.
+Hooray!
+Oh, for goodness sake.
+That's the silliest thing I ever heard!
+Wonderful! Just wonderful.
+Oh boy.
+Yikes!
+Now hold on just a minute.
+I don't believe it.
+That's amazing!
+
+# --- Conversational filler and transitions ---
+Well, let me think about that for a second.
+That's a good question, actually.
+You know, I've been wondering the same thing.
+Here's the thing.
+Let me tell you something.
+It's not easy being green.
+As a matter of fact, yes.
+Sure, why not?
+I suppose that's true.
+Anyway, where were we?
+Now then.
+That reminds me of a story.
+Between you and me?
+Believe it or not.
+
+# --- Longer sentences, for prosody over a full breath ---
+I've been thinking about this for a while now, and I still don't have a good answer for you.
+There's something wonderful about a warm evening and a good song and nobody in a hurry to be anywhere.
+Every time I think I've got everything under control, somebody comes along and proves me completely wrong.
+The trouble with being in charge is that everyone expects you to know what happens next.
+It took a long time to get here, but I wouldn't trade a minute of it for anything.
+You'd be surprised how often the simplest answer turns out to be the right one.
+I'd love to help you with that, but I'm going to need a little more information first.
+Sometimes the best thing you can do is sit still and wait for the whole thing to blow over.
+
+# --- Sign-offs ---
+See you later!
+Goodbye for now.
+Take care of yourself.
+It's been a pleasure, really.
+Until next time!
+Good night, everybody.
+So long, and thanks for stopping by.
+Catch you later, okay?
+
+
+# =============================================================================
+# PART 2 - PHONETIC COVERAGE
+# =============================================================================
+
+# --- "th", voiced and voiceless ---
+The thin blue thread snapped in three places.
+Thirty birds gathered on the north path at dawn.
+Both of them thought the answer was perfectly obvious.
+My mother says the weather will turn by Thursday.
+Breathe slowly and count backward from ten.
+Are those old photographs worth keeping together?
+Nothing much ever happens here on a Tuesday.
+
+# --- "sh", "zh", "ch", "j" ---
+The ship sailed past the shallow reef at sunset.
+Fresh shells wash up along the shore every morning.
+She measured the treasure and wrote down the total.
+It was the usual vision of a quiet afternoon.
+The church bells rang while children watched from the kitchen.
+He asked a question nobody in the room could answer.
+The judge crossed the bridge on his way to the village.
+Gentle rain fell on the orange trees all night.
+
+# --- "ng", "r", "l" ---
+Someone was singing a long slow song this morning.
+Hunger and strength rarely arrive at the same moment.
+Three red balloons drifted around the empty parking lot.
+Carry the orange crate around to the back door.
+A little light spilled through the bottle on the shelf.
+Follow the milk truck until it turns left.
+Roll the dough thin and cut it into squares.
+
+# --- "w", "y", "h", "v", "f" ---
+I wonder why the water tastes different way out here.
+The yellow canoe drifted well beyond the second bend.
+Young trees grow quickly behind the hollow oak.
+Five leaves floated over the surface of the coffee.
+Have you been waiting here the whole time?
+Warm bread and butter, and nothing else needed.
+
+# --- "s", "z", and stops ---
+My sister was too busy to visit the zoo.
+It seemed easy enough until we actually tried it.
+The purple puppy toy popped like a bubble.
+A little ladder leaned against the mustard yellow wall.
+Cookies and garden vegetables filled the kitchen table.
+Someone giggled in the back of the crowded room.
+Summer mornings here have a common sort of stillness.
+Salt and pepper sat beside the empty plate.
+
+# --- Consonant clusters ---
+Twelve strong horses pulled the wagon up the hill.
+Splash through the spring puddles and don't worry about it.
+He had thrown the crisp letter into the fire.
+We asked for the sixth key but got the wrong one.
+I caught a glimpse of something moving in the grass.
+Twelve thousand people filled the stadium by seven.
+The old bridge groaned under the weight of the truck.
+
+# --- Vowels and diphthongs ---
+The boat drifted out toward open water at noon.
+Put the book back on the shelf before you go.
+That bird bit the branch clean through.
+Boil the oil until it bubbles at the edges.
+Eight children waited quietly by the garden gate.
+Oats and honey make a decent breakfast.
+The bright kite climbed high above the field.
+Nobody bought anything at the auction that afternoon.
+A brown moth circled the porch lamp for hours.
+Please pour the juice into the tall glass.
+Did you leave the light on in the hallway?
+
+# --- General coverage and varied sentence shapes ---
+She walked to the station in the pouring rain.
+The dog chased a squirrel across the frozen pond.
+He whispered something I could not quite make out.
+The train arrived exactly four minutes late.
+Green apples taste better than the red ones here.
+Every window in the house was open that evening.
+We drove south for hours without seeing another car.
+The quiet room smelled faintly of old paper.
+Six sailors rowed steadily toward the lighthouse.
+My uncle keeps a workshop behind the garage.
+A single candle lit the whole staircase.
+The clock on the mantel stopped just after midnight.
+Wash your hands before you touch the dough.
+That was the strangest thing I have seen all week!
+Snow covered the roof and the front steps.
+He plays the piano better than anyone I know.
+The letter arrived in a plain brown envelope.
+The children built a fort out of couch cushions.
+Turn the volume down before the neighbors complain!
+Fresh coffee and a newspaper is all I need.
+The path narrowed and then vanished completely.
+Where did you say you left the keys?
+Nine of them showed up without any warning at all.
+The kettle whistled just as the phone started ringing.
+Everything worth doing takes a little longer than you expect.
