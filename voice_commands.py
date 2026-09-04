@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import random
 import re
+import subprocess
+from datetime import datetime
+from typing import Optional
 from rapidfuzz import process, fuzz
 from pydispatch import dispatcher
 
@@ -27,6 +30,27 @@ class VoiceCommandHandler:
 			"what wifi are you connected to", "what network are you on",
 			"which wifi are you on", "are you connected to wifi",
 			"what's your network", "tell me your wifi", "which network", "wifi network"
+		],
+		"get_time": [
+			"what time is it", "what's the time", "what is the time",
+			"do you have the time", "tell me the time", "got the time",
+			"what time do you have", "the time",
+		],
+		"get_day": [
+			"what day of the week is it", "what day is it", "what day is today",
+			"what's today", "what is today", "which day is it",
+		],
+		"get_month": [
+			"what month is it", "what's the month", "what is the month",
+			"which month is it", "what month are we in",
+		],
+		"get_date": [
+			"what's the date", "what is the date", "what's today's date",
+			"what is today's date", "tell me the date", "the date today",
+		],
+		"get_year": [
+			"what year is it", "what's the year", "what is the year",
+			"which year is it", "what year are we in",
 		],
 		"who_are_you": [
 			"who are you", "what's your name", "tell me about you", "tell me about yourself",
@@ -95,13 +119,6 @@ class VoiceCommandHandler:
 	@classmethod
 	def _show_keys(cls, show_name: str) -> set:
 		"""Every normalized string that should match this show.
-
-		A stem like "Gin & Juice - Snoop Frogg" yields the whole thing plus
-		each side of the separator, so "gin and juice" scores against the
-		title alone instead of being diluted by an artist name the speaker
-		never said. Both sides are indexed because filenames use both
-		"Artist - Title" and "Title - Artist" conventions and we can't tell
-		which from the name.
 		"""
 		stem = cls._TRACK_PREFIX.sub("", show_name)
 		keys = {cls._normalize(stem)}
@@ -129,6 +146,16 @@ class VoiceCommandHandler:
 		self._normalized_blocklist = {
 			self._normalize(p) for p in self.PLAY_BY_NAME_BLOCKLIST
 		}
+		# Not synced here: systemd-timesyncd already does NTP properly and keeps
+		# doing it. This only reports what it found, so a wrong clock is
+		# visible at startup rather than discovered mid-show.
+		synced = self._ntp_synchronized()
+		if synced is False:
+			print("VoiceCommandHandler: system clock is not NTP-synchronized "
+			      f"(reads {datetime.now():%Y-%m-%d %H:%M}).")
+		elif synced is None:
+			print("VoiceCommandHandler: could not determine clock sync state "
+			      f"(reads {datetime.now():%Y-%m-%d %H:%M}).")
 		print("VoiceCommandHandler: initialized.")
 
 	def parse(self, transcript: str) -> bool:
@@ -138,13 +165,11 @@ class VoiceCommandHandler:
 		"""
 		text = transcript.lower().strip().rstrip(".,!?")
 
-		# 1. Check play-by-name first (e.g. "play Rainbow Connection")
 		song_name = self._match_play_by_name(text)
 		if song_name is not None:
 			if self._handle_play_by_name(song_name):
 				return True
 
-		# 2. Check connect-to-wifi prefix (e.g. "connect to MyNetwork")
 		ssid_name = self._match_connect_wifi(text)
 		if ssid_name is not None:
 			self._handle_connect_wifi(ssid_name)
@@ -191,14 +216,15 @@ class VoiceCommandHandler:
 
 	def _dispatch_intent(self, intent: str) -> None:
 		handlers = {
-			"look_left":        self._handle_look_left,
-			"look_right":       self._handle_look_right,
-			"look_up":          self._handle_look_up,
-			"look_down":        self._handle_look_down,
 			"sing":             self._handle_sing,
 			"stop":				self._handle_stop,
 			"get_ip":           self._handle_get_ip,
 			"get_wifi_network": self._handle_get_wifi_network,
+			"get_time":         self._handle_get_time,
+			"get_day":          self._handle_get_day,
+			"get_month":        self._handle_get_month,
+			"get_date":         self._handle_get_date,
+			"get_year":         self._handle_get_year,
 			"who_are_you":      self._handle_who_are_you,
 			"greeting":         self._handle_greeting,
 		}
@@ -208,22 +234,6 @@ class VoiceCommandHandler:
 			handler()
 
 	# --- intent handlers ---
-
-	def _handle_look_left(self) -> None:
-		print("VoiceCommandHandler: look left")
-		# TODO: dispatcher.send(signal='movementCommand', movement='look_left')
-
-	def _handle_look_right(self) -> None:
-		print("VoiceCommandHandler: look right")
-		# TODO: dispatcher.send(signal='movementCommand', movement='look_right')
-
-	def _handle_look_up(self) -> None:
-		print("VoiceCommandHandler: look up")
-		# TODO: dispatcher.send(signal='movementCommand', movement='look_up')
-
-	def _handle_look_down(self) -> None:
-		print("VoiceCommandHandler: look down")
-		# TODO: dispatcher.send(signal='movementCommand', movement='look_down')
 
 	def _handle_sing(self) -> None:
 		print("VoiceCommandHandler: sing")
@@ -327,6 +337,9 @@ class VoiceCommandHandler:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 			return
 
+		# Offline only: the ellipsis pauses that space the digits out are
+		# inserted by the Piper path, and ElevenLabs would read straight past
+		# them at its own cadence.
 		dispatcher.send(signal="executeTTS", text=self._spell_ip(ip), bForceOffline=True)
 
 	@staticmethod
@@ -351,14 +364,126 @@ class VoiceCommandHandler:
 		ssid = self._wifi_management.get_current_ssid()
 		if ssid:
 			responses = [
-				f"Well... currently I'm connected to {ssid}",
+				f"Well - currently I'm connected to {ssid}",
 				f"Right now I'm connected to {ssid}",
 				f"Oh, I'm hooked up to {ssid}",
 				f"My wifi network is {ssid}",
 			]
-			dispatcher.send(signal="executeTTS", text=random.choice(responses), bForceOffline=True)
+			dispatcher.send(signal="executeTTS", text=random.choice(responses))
 		else:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
+
+	# Below this the clock is obviously unset — the Orin Nano dev kit has no
+	# battery-backed RTC, so a cold boot with no network lands in 1970 or at
+	# whatever the image was built with.
+	_MIN_PLAUSIBLE_YEAR = 2024
+
+	_MONTHS = [
+		"January", "February", "March", "April", "May", "June",
+		"July", "August", "September", "October", "November", "December",
+	]
+
+	@classmethod
+	def _clock_is_trustworthy(cls) -> bool:
+		"""Sanity-check the system clock before speaking a date aloud.
+
+		The year test is primary because it catches the failure that actually
+		happens. timedatectl is consulted only to log why — an un-synced clock
+		that still reads plausibly is usually fine, so it is not grounds to
+		refuse on its own.
+		"""
+		if datetime.now().year >= cls._MIN_PLAUSIBLE_YEAR:
+			return True
+		print("VoiceCommandHandler: system clock reads "
+		      f"{datetime.now():%Y-%m-%d %H:%M} — refusing to state the time.")
+		return False
+
+	@staticmethod
+	def _ntp_synchronized() -> Optional[bool]:
+		"""True/False from timedatectl, or None if it cannot be determined."""
+		try:
+			result = subprocess.run(
+				["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+				capture_output=True, text=True, timeout=2,
+			)
+		except Exception:
+			return None
+		value = result.stdout.strip()
+		return value == "yes" if value in ("yes", "no") else None
+
+	def _say_unknown_time(self) -> None:
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			"Oh gee... I've completely lost track of time.",
+			"Hmm... my clock isn't set, so I honestly couldn't tell you.",
+			"Well now... I'm afraid I don't know what time it is.",
+		]))
+
+	def _handle_get_time(self) -> None:
+		if not self._clock_is_trustworthy():
+			self._say_unknown_time()
+			return
+		now = datetime.now()
+		hour = now.hour % 12 or 12
+		if now.hour < 12:
+			part = "in the morning"
+		elif now.hour < 17:
+			part = "in the afternoon"
+		elif now.hour < 21:
+			part = "in the evening"
+		else:
+			part = "at night"
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			f"It's {hour}:{now.minute:02d} {part}.",
+			f"Well, it's about {hour}:{now.minute:02d} {part}.",
+			f"Right now it's {hour}:{now.minute:02d} {part}.",
+		]))
+
+	def _handle_get_day(self) -> None:
+		if not self._clock_is_trustworthy():
+			self._say_unknown_time()
+			return
+		day = datetime.now().strftime("%A")
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			f"It's {day}.",
+			f"Today is {day}.",
+			f"Why, it's {day}!",
+		]))
+
+	def _handle_get_month(self) -> None:
+		if not self._clock_is_trustworthy():
+			self._say_unknown_time()
+			return
+		month = self._MONTHS[datetime.now().month - 1]
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			f"It's {month}.",
+			f"We're in {month}.",
+		]))
+
+	def _handle_get_date(self) -> None:
+		if not self._clock_is_trustworthy():
+			self._say_unknown_time()
+			return
+		now = datetime.now()
+		month = self._MONTHS[now.month - 1]
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			f"It's {now.strftime('%A')}, {month} {self._ordinal(now.day)}, {now.year}.",
+			f"Today is {month} {self._ordinal(now.day)}, {now.year}.",
+		]))
+
+	def _handle_get_year(self) -> None:
+		if not self._clock_is_trustworthy():
+			self._say_unknown_time()
+			return
+		dispatcher.send(signal="executeTTS", bForceOffline=True, text=random.choice([
+			f"It's {datetime.now().year}.",
+			f"Why, it's {datetime.now().year}!",
+		]))
+
+	@staticmethod
+	def _ordinal(day: int) -> str:
+		if 11 <= day % 100 <= 13:
+			return f"{day}th"
+		return f"{day}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th') }"
 
 	def _handle_who_are_you(self) -> None:
 		dispatcher.send(signal="playVoiceFile", file="who_are_you.ogg")
