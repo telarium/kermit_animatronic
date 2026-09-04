@@ -327,7 +327,7 @@ class VoiceCommandHandler:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 			return
 
-		dispatcher.send(signal="executeTTS", text=self._spell_ip(ip))
+		dispatcher.send(signal="executeTTS", text=self._spell_ip(ip), bForceOffline=True)
 
 	@staticmethod
 	def _spell_ip(ip: str) -> str:
@@ -351,12 +351,12 @@ class VoiceCommandHandler:
 		ssid = self._wifi_management.get_current_ssid()
 		if ssid:
 			responses = [
-				f"Well - currently I'm connected to {ssid}",
+				f"Well... currently I'm connected to {ssid}",
 				f"Right now I'm connected to {ssid}",
 				f"Oh, I'm hooked up to {ssid}",
 				f"My wifi network is {ssid}",
 			]
-			dispatcher.send(signal="executeTTS", text=random.choice(responses))
+			dispatcher.send(signal="executeTTS", text=random.choice(responses), bForceOffline=True)
 		else:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 
