@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import sys
 import time
 import warnings
@@ -381,11 +382,17 @@ class Kermit:
 			self.wakeword.set_enabled(True)
 			self.movements.reset_all()
 
+	# The marker is not always the last thing on the line — small models emit
+	# "[?]." and "[?] !" too, which a plain endswith() misses, leaving the
+	# marker to be spoken and the follow-up never triggered.
+	_TRAILING_MARKER_RE = re.compile(r"\s*\[\s*\?\s*\]\s*[.!?,]*\s*$")
+
 	def on_execute_text_to_speech(self, text: str, bForceOffline: bool = False) -> None:
 		"""bForceOffline bypasses ElevenLabs and speaks with the Piper voice."""
-		if text.endswith("[?]"):
+		match = self._TRAILING_MARKER_RE.search(text)
+		if match:
 			self._awaiting_followup = True
-			text = text[:-3].rstrip()
+			text = text[:match.start()].rstrip()
 			print("Response: {} [?]".format(text))
 		else:
 			self._awaiting_followup = False

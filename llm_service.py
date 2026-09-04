@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import configparser
+import re
 import threading
 import time
 from collections import deque
@@ -170,11 +171,19 @@ class LLM:
 			messages += self.FALLBACK_EXAMPLES
 			turns = self.FALLBACK_HISTORY_TURNS
 		else:
-			messages = [{"role": "system", "content": self.llm_context + self.CONTEXT_POSTFIX}]
+			messages = [{"role": "system",
+				"content": self._cloud_context() + self.CONTEXT_POSTFIX}]
 			turns = self.HISTORY_LIMIT
 		messages += list(history)[-turns * 2:]
 		messages.append({"role": "user", "content": user_text})
 		return messages
+
+	def _cloud_context(self) -> str:
+		"""LLMContextShort carries identity, LLMContext carries personality —
+		the cloud models get both. The offline path takes the short one alone,
+		which is the whole reason the two are separate fields."""
+		parts = [p for p in (self.llm_context_short, self.llm_context) if p]
+		return " ".join(parts)
 
 	def _send(self, query: str) -> None:
 		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=query)
@@ -275,15 +284,19 @@ class LLM:
 		self._fallback_history.append({"role": "assistant", "content": text})
 		return text
 
-	@staticmethod
-	def _strip_stray_marker(text: str) -> str:
+	_TRAILING_MARKER_RE = re.compile(r"\s*\[\s*\?\s*\]\s*[.!?,]*\s*$")
+
+	@classmethod
+	def _strip_stray_marker(cls, text: str) -> str:
 		"""Drop a trailing [?] the model tacked onto a statement.
 		"""
-		if not text.endswith("[?]"):
+		match = cls._TRAILING_MARKER_RE.search(text)
+		if not match:
 			return text
-		body = text[:-3].rstrip()
+		body = text[:match.start()].rstrip()
 		if body.endswith("?"):
-			return text
+			# Re-emit it bare so trailing punctuation can't hide it downstream.
+			return body + " [?]"
 		print("LLM: dropped a [?] the offline model added to a statement.")
 		return body
 

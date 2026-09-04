@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import configparser
 import glob
+import io
 import json
 import os
 import re
@@ -10,7 +11,7 @@ import time
 import wave
 import requests
 from pydispatch import dispatcher
-from typing import Optional
+from typing import List, Optional
 
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 
@@ -20,6 +21,9 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # offline paths. Raw text still reaches the logs and the web UI upstream of
 # here — this is only what the voice actually says.
 _STAGE_DIRECTIONS_RE = re.compile(r"\*[^*]*\*")
+# Removed whole, before the bracket characters are stripped — otherwise a
+# surviving "[?]" collapses to a bare "?" that gets pronounced.
+_MARKER_RE = re.compile(r"\[\s*\?\s*\]")
 # Folded rather than dropped: deleting a curly apostrophe turns "don't" into
 # "dont", which Piper duly pronounces.
 _UNICODE_FOLD = {
@@ -34,17 +38,21 @@ _UNICODE_FOLD = {
 }
 _DISALLOWED_RE = re.compile(r"[^A-Za-z0-9\s.,!?'\";:()\-]")
 _WHITESPACE_RE = re.compile(r"\s+")
+# Punctuation left stranded once a marker or stage direction is removed.
+_ORPHAN_PUNCT_RE = re.compile(r"(?<=[.!?,;:])\s+[.,;:]+")
 
 
 def sanitize_for_speech(text: str) -> str:
 	"""Reduce a reply to what a voice can actually pronounce."""
 	if not text:
 		return ""
+	text = _MARKER_RE.sub(" ", text)
 	text = _STAGE_DIRECTIONS_RE.sub(" ", text)
 	for source, replacement in _UNICODE_FOLD.items():
 		text = text.replace(source, replacement)
 	text = _DISALLOWED_RE.sub("", text)
-	return _WHITESPACE_RE.sub(" ", text).strip()
+	text = _WHITESPACE_RE.sub(" ", text).strip()
+	return _ORPHAN_PUNCT_RE.sub("", text).strip()
 
 
 class TextToSpeech:
@@ -65,7 +73,8 @@ class TextToSpeech:
 
 		# Offline fallback voice.
 		self.piper_dir: str = ""
-		self.piper_speed: float = 1.0
+		self.piper_speed: float = 1.0   # Piper length_scale; >1 is slower
+		self._logged_synth_path: bool = False
 		self.piper_volume: float = 1.0
 		self._piper_voice = None
 		self._piper_lock = threading.Lock()
@@ -98,7 +107,7 @@ class TextToSpeech:
 	def apply_hardware_config(self, hardware_path: Optional[str]) -> None:
 		"""Read the optional "piper" block from the character JSON:
 
-			"piper": { "directory": "lib/piper/kermit/", "speed": 1.3, "volume": 0.8 }
+			"piper": { "directory": "lib/piper/kermit/", "length_scale": 1.3, "volume": 0.8 }
 		"""
 		if not hardware_path:
 			return
@@ -117,14 +126,21 @@ class TextToSpeech:
 		directory = str(piper.get('directory', '')).strip()
 		self.piper_dir = os.path.join(_BASE_DIR, directory) if directory else ""
 
-		# speed is Piper's length_scale: >1 is slower.
-		self.piper_speed  = self._positive_float(piper, 'speed', self.piper_speed)
+		# Piper's length_scale is a duration multiplier: >1 is SLOWER. The key
+		# used to be called 'speed', which reads as the opposite of what it
+		# does; 'speed' is still accepted so existing configs keep working.
+		if 'length_scale' in piper:
+			self.piper_speed = self._positive_float(piper, 'length_scale', self.piper_speed)
+		elif 'speed' in piper:
+			self.piper_speed = self._positive_float(piper, 'speed', self.piper_speed)
+			print("TextToSpeech: piper.speed is the old name for piper.length_scale "
+			      "(>1 is slower, not faster).")
 		# volume scales the normalized output: 0.8 is 80% of full scale.
 		self.piper_volume = self._positive_float(piper, 'volume', self.piper_volume, maximum=1.0)
 
 		if self.piper_dir:
 			print(f"TextToSpeech: offline voice dir '{self.piper_dir}' "
-			      f"(speed={self.piper_speed}, volume={self.piper_volume})")
+			      f"(length_scale={self.piper_speed}, volume={self.piper_volume})")
 
 	@staticmethod
 	def _positive_float(block: dict, name: str, default: float, maximum: Optional[float] = None) -> float:
@@ -303,6 +319,57 @@ class TextToSpeech:
 			print(f"TextToSpeech: loaded offline voice {os.path.basename(model)}")
 			return self._piper_voice
 
+	# Silence inserted at each "..." on the offline path. One wav rather than a
+	# sequence of them: _calculate_rms normalizes against the peak of whatever
+	# file it is given, so splitting would rescale a quiet trailing phrase up
+	# to full mouth travel and lose the dynamics the pause is there to create.
+	PIPER_ELLIPSIS_PAUSE_S = 0.45
+
+	_ELLIPSIS_SPLIT_RE = re.compile(r"(?<=\.\.\.)(?!\.)\s*")
+	_HAS_SPEECH_RE = re.compile(r"[A-Za-z0-9]")
+
+	@classmethod
+	def _split_on_ellipses(cls, text: str) -> List[str]:
+		"""Split into chunks, keeping the '...' on the chunk it follows."""
+		chunks = cls._ELLIPSIS_SPLIT_RE.split(text)
+		return [c.strip() for c in chunks if cls._HAS_SPEECH_RE.search(c)]
+
+	def _synthesize_piper_spaced(self, voice, text: str, wav_file) -> None:
+		"""Synthesize each chunk and join them with real silence."""
+		chunks = self._split_on_ellipses(text)
+		if len(chunks) < 2:
+			self._synthesize_piper(voice, text, wav_file)
+			return
+
+		params = None
+		segments = []
+		for chunk in chunks:
+			buffer = io.BytesIO()
+			with wave.open(buffer, "wb") as chunk_wav:
+				self._synthesize_piper(voice, chunk, chunk_wav)
+			buffer.seek(0)
+			with wave.open(buffer, "rb") as chunk_wav:
+				if params is None:
+					params = chunk_wav.getparams()
+				segments.append(chunk_wav.readframes(chunk_wav.getnframes()))
+
+		if params is None:
+			self._synthesize_piper(voice, text, wav_file)
+			return
+
+		wav_file.setnchannels(params.nchannels)
+		wav_file.setsampwidth(params.sampwidth)
+		wav_file.setframerate(params.framerate)
+
+		pause_frames = int(params.framerate * self.PIPER_ELLIPSIS_PAUSE_S)
+		silence = b"\x00" * (pause_frames * params.sampwidth * params.nchannels)
+		for index, segment in enumerate(segments):
+			if index:
+				wav_file.writeframes(silence)
+			wav_file.writeframes(segment)
+		print(f"TextToSpeech: {len(segments)} chunks joined with "
+		      f"{self.PIPER_ELLIPSIS_PAUSE_S:.2f}s pauses.")
+
 	def _synthesize_piper(self, voice, text: str, wav_file) -> None:
 		"""piper-tts >= 1.3 takes a SynthesisConfig; older releases take kwargs."""
 		syn_config = None
@@ -319,8 +386,20 @@ class TextToSpeech:
 			pass
 
 		if syn_config is not None and hasattr(voice, "synthesize_wav"):
+			if not self._logged_synth_path:
+				self._logged_synth_path = True
+				print(f"TextToSpeech: using synthesize_wav with "
+				      f"length_scale={getattr(syn_config, 'length_scale', None)}, "
+				      f"volume={getattr(syn_config, 'volume', None)}")
 			voice.synthesize_wav(text, wav_file, syn_config=syn_config)
 			return
+
+		if not self._logged_synth_path:
+			self._logged_synth_path = True
+			print(f"TextToSpeech: using legacy synthesize() "
+			      f"(SynthesisConfig {'unavailable' if syn_config is None else 'built'}, "
+			      f"synthesize_wav {'absent' if not hasattr(voice, 'synthesize_wav') else 'present'}) "
+			      f"length_scale={self.piper_speed}")
 
 		# Legacy piper-tts has no volume control.
 		if self.piper_volume != 1.0 and not self._warned_legacy_volume:
@@ -340,7 +419,7 @@ class TextToSpeech:
 			)
 			tmp.close()
 			with wave.open(tmp.name, "wb") as wav_file:
-				self._synthesize_piper(voice, text, wav_file)
+				self._synthesize_piper_spaced(voice, text, wav_file)
 
 			dispatcher.send(signal="playVoiceFile", file=tmp.name)
 

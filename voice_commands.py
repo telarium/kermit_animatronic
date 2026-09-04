@@ -327,23 +327,25 @@ class VoiceCommandHandler:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 			return
 
-		EXACT_FILES = {
-			10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-			30, 40, 50, 60, 70, 80, 90, 100
-		}
+		dispatcher.send(signal="executeTTS", text=self._spell_ip(ip))
 
-		files = ["ip_prefix.ogg"]
-		for i, octet in enumerate(ip.split(".")):
-			n = int(octet)
-			if n in EXACT_FILES:
-				files.append(f"number_{n}.wav")
-			else:
-				for digit in octet:
-					files.append(f"number_{digit}.wav")
-			if i < 3:
-				files.append("dot.wav")
+	@staticmethod
+	def _spell_ip(ip: str) -> str:
+		"""Space an IP out one digit at a time, joined by ellipses.
 
-		dispatcher.send(signal="playVoiceSequence", fileList=files)
+		The ellipses are what the offline TTS splits on to insert real
+		silence, so the digits land slowly enough to write down. "0" is
+		written out because a bare digit on its own reads as "oh" as often
+		as "zero".
+		"""
+		parts = ["My IP address is"]
+		octets = ip.split(".")
+		for index, octet in enumerate(octets):
+			for digit in octet:
+				parts.append("zero" if digit == "0" else digit)
+			if index < len(octets) - 1:
+				parts.append("dot")
+		return "... ".join(parts)
 
 	def _handle_get_wifi_network(self) -> None:
 		ssid = self._wifi_management.get_current_ssid()
