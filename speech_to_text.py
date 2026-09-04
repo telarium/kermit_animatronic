@@ -197,6 +197,7 @@ class SpeechToText:
 			deadline = time.monotonic() + self.PRESPEECH_TIMEOUT_S
 			heard_speech = False
 			chunks_seen = 0
+			peak_level = 0.0
 
 			# Audio captured since the turn's anchor — whatever was said while
 			# the acknowledgement animation played and this handler was
@@ -228,14 +229,19 @@ class SpeechToText:
 					continue
 
 				chunks_seen += 1
+
+				# Peak over the whole interval — a spot sample misses a short
+				# utterance entirely.
+				peak_level = max(peak_level, float(np.abs(chunk.astype(np.float32)).mean()))
+
 				if chunks_seen % 25 == 0 and not heard_speech:
 					# Diagnostic only — nothing branches on this. It separates
 					# "no audio is arriving" from "audio is arriving but the
 					# model isn't emitting tokens", which need opposite fixes.
-					level = float(np.abs(chunk.astype(np.float32)).mean())
 					print(f"SpeechToText: waiting... {chunks_seen} chunks "
-					      f"({chunks_seen * 0.08:.1f}s), mean level {level:.0f}, "
+					      f"({chunks_seen * 0.08:.1f}s), peak level {peak_level:.0f}, "
 					      f"no tokens yet.")
+					peak_level = 0.0
 
 				stream.accept_waveform(
 					self.SAMPLE_RATE, chunk.astype(np.float32) / 32768.0
