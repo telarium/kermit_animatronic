@@ -18,10 +18,7 @@ class LLM:
 	# the thread long before 20 exchanges.
 	FALLBACK_HISTORY_TURNS = 3
 
-	# Wall-clock budget for the ENTIRE cloud tier, not per provider. The three
-	# providers chain, so a per-provider timeout would triple before failover
-	# and leave the puppet silent for 12s on a hung connection.
-	CLOUD_TIMEOUT_S = 4.0
+	CLOUD_TIMEOUT_S = 8.0
 	MIN_ATTEMPT_S = 0.5  # below this there isn't time for a useful attempt
 
 	FALLBACK_URL = "http://127.0.0.1:8081"
