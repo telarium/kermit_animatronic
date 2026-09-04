@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+import glob
+import json
 import os
-import sys
+import shutil
 import subprocess
-from typing import List
+import sys
+import tempfile
+import time
+import urllib.request
+from typing import List, Optional
 
 class Setup:
 	def __init__(self) -> None:
@@ -42,8 +48,8 @@ class Setup:
 			# USB-serial for ProgramBlue / PL2303 adapter
 			"pyserial",
 		])
-		self.setup_piper_models()
 		self.setup_sherpa_models()
+		self.setup_llama()
 		self.setup_openwakeword_models()
 		self.setup_respeaker()
 		self.setup_pl2303()
@@ -74,26 +80,7 @@ class Setup:
 			print(f"Failed to install Python packages: {e}")
 			sys.exit(1)
 
-	def setup_piper_models(self) -> None:
-		try:
-			script_dir = os.path.dirname(os.path.abspath(__file__))
-			subprocess.check_call([
-				"wget", "-O", os.path.join(script_dir, "en_US-ryan-low.onnx"),
-				"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx?download=true"
-			])
-			subprocess.check_call([
-				"wget", "-O", os.path.join(script_dir, "en_US-ryan-low.json"),
-				"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx.json?download=true"
-			])
-			print(f"Piper TTS models are available in {script_dir}.")
-		except subprocess.CalledProcessError as e:
-			print(f"Failed to set up Piper models: {e}")
-			sys.exit(1)
-
-	# Streaming transducer used by speech_to_text.py. The 560ms chunk export
-	# is the accuracy/latency sweet spot: larger chunks are *both* more
-	# accurate and cheaper (fewer encoder invocations per second), but 1120ms
-	# adds noticeable dead air before Kermit responds.
+	# Streaming transducer used by speech_to_text.py.
 	SHERPA_MODEL = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
 	SHERPA_MODEL_URL = (
 		"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
@@ -102,9 +89,6 @@ class Setup:
 
 	def setup_sherpa_models(self) -> None:
 		"""Download the Nemotron streaming transducer into lib/sherpa_onnx/models/.
-
-		This is a ~630MB download and will take a while on first run. The
-		path must match SpeechToText.MODEL_DIR in speech_to_text.py.
 		"""
 		script_dir = os.path.dirname(os.path.abspath(__file__))
 		models_dir = os.path.join(script_dir, "lib", "sherpa_onnx", "models")
@@ -131,6 +115,234 @@ class Setup:
 				os.remove(archive)
 
 		print(f"Sherpa model installed to {model_dir}.")
+
+	# llama.cpp moves fast and flag behaviour changes between releases, so
+	# this is pinned rather than tracking master.
+	LLAMA_REPO = "https://github.com/ggml-org/llama.cpp.git"
+	LLAMA_COMMIT = "b96806d96"
+	LLAMA_MODEL_REPO = "ggml-org/Qwen3-1.7B-GGUF"
+	# Tried in order. The repo does not necessarily carry every quant, so the
+	# actual filename is discovered from the HF API rather than hardcoded.
+	LLAMA_QUANT_PREFERENCE = ["Q4_K_M", "Q8_0", "Q4_0", "BF16", "f16"]
+	# Sanity floor for "is this actually a model?". The 1.7B Q4_K_M is ~1.2GB;
+	# llama.cpp's own ggml-vocab-*.gguf test fixtures are 600KB-16MB, and a
+	# wget that lands on an HTML error page is smaller still.
+	LLAMA_MODEL_MIN_BYTES = 500 * 1024 * 1024
+	LLAMA_PORT = 8081  # 8080 is whisper-server
+
+	def _find_cuda_root(self) -> Optional[str]:
+		"""Locate the CUDA toolkit. Deliberately does NOT rely on PATH: the
+		exports setup_bashrc writes don't apply to the running process, and on
+		JetPack the toolkit is always under /usr/local."""
+		nvcc = shutil.which("nvcc")
+		if nvcc:
+			return os.path.dirname(os.path.dirname(nvcc))
+		candidates = sorted(glob.glob("/usr/local/cuda*/bin/nvcc"), reverse=True)
+		if candidates:
+			return os.path.dirname(os.path.dirname(candidates[0]))
+		return None
+
+	def _cuda_env(self, cuda_root: str) -> dict:
+		env = os.environ.copy()
+		env["PATH"] = f"{cuda_root}/bin:" + env.get("PATH", "")
+		env["LD_LIBRARY_PATH"] = f"{cuda_root}/lib64:" + env.get("LD_LIBRARY_PATH", "")
+		return env
+
+	def setup_llama(self) -> None:
+		"""Build llama.cpp with CUDA into lib/llama/, fetch the GGUF, and
+		install the llama-server unit. The build takes 10-15 minutes."""
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		llama_dir  = os.path.join(script_dir, "lib", "llama")
+		binary     = os.path.join(llama_dir, "build", "bin", "llama-server")
+
+		cuda_root = self._find_cuda_root()
+		if cuda_root is None:
+			print("llama: CUDA toolkit not found under /usr/local. Install it "
+			      "(sudo apt install cuda-toolkit) and re-run.")
+			return
+		print(f"llama: using CUDA at {cuda_root}")
+
+		if os.path.isfile(binary):
+			print("llama.cpp already built, skipping build.")
+		else:
+			self._build_llama(llama_dir, cuda_root)
+
+		# NOT lib/llama/models/. The llama.cpp checkout ships ~25 vocab-only
+		# ggml-vocab-*.gguf test fixtures in that directory; treating them as
+		# candidate models makes the download step no-op and hands systemd a
+		# file with no weights, which fails at load with the fairly opaque
+		# "check_tensor_dims: tensor 'token_embd.weight' not found".
+		model_path = self._download_llama_model(os.path.join(script_dir, "models"))
+		if model_path is None:
+			print("llama: no model available — skipping service install.")
+			return
+
+		self._install_llama_service(binary, model_path, cuda_root)
+
+	def _build_llama(self, llama_dir: str, cuda_root: str) -> None:
+		if not os.path.isdir(llama_dir):
+			print("Cloning llama.cpp...")
+			subprocess.check_call(["git", "clone", self.LLAMA_REPO, llama_dir])
+		subprocess.check_call(["git", "-C", llama_dir, "fetch", "--all", "--tags"])
+		subprocess.check_call(["git", "-C", llama_dir, "checkout", self.LLAMA_COMMIT])
+
+		env = self._cuda_env(cuda_root)
+		print("Building llama.cpp with CUDA (10-15 minutes)...")
+		try:
+			subprocess.check_call(
+				["cmake", "-B", "build", "-DGGML_CUDA=ON",
+				 f"-DCMAKE_CUDA_COMPILER={cuda_root}/bin/nvcc"],
+				cwd=llama_dir, env=env,
+			)
+			subprocess.check_call(
+				["cmake", "--build", "build", "--config", "Release", "-j6"],
+				cwd=llama_dir, env=env,
+			)
+		except subprocess.CalledProcessError as e:
+			print(f"llama: build failed: {e}")
+			sys.exit(1)
+
+	def _existing_llama_model(self, models_dir: str) -> Optional[str]:
+		"""Return a usable .gguf already in models_dir, or None.
+
+		Sorted for determinism — os.listdir order is arbitrary, so an
+		unsorted first-match is not reproducible between machines.
+		"""
+		for name in sorted(os.listdir(models_dir)):
+			if not name.endswith(".gguf"):
+				continue
+			path = os.path.join(models_dir, name)
+			size = os.path.getsize(path)
+			if size >= self.LLAMA_MODEL_MIN_BYTES:
+				print(f"llama: model already present ({name}), skipping download.")
+				return path
+			print(f"llama: ignoring {name} — {size} bytes is too small to be a model.")
+		return None
+
+	def _download_llama_model(self, models_dir: str) -> Optional[str]:
+		os.makedirs(models_dir, exist_ok=True)
+
+		existing = self._existing_llama_model(models_dir)
+		if existing:
+			return existing
+
+		try:
+			url = f"https://huggingface.co/api/models/{self.LLAMA_MODEL_REPO}"
+			with urllib.request.urlopen(url, timeout=30) as response:
+				data = json.load(response)
+		except Exception as e:
+			print(f"llama: could not list {self.LLAMA_MODEL_REPO}: {e}")
+			return None
+
+		available = [
+			s["rfilename"] for s in data.get("siblings", [])
+			if s.get("rfilename", "").endswith(".gguf")
+		]
+		if not available:
+			print(f"llama: no .gguf files found in {self.LLAMA_MODEL_REPO}.")
+			return None
+
+		filename = None
+		for quant in self.LLAMA_QUANT_PREFERENCE:
+			match = next((f for f in available if quant.lower() in f.lower()), None)
+			if match:
+				filename = match
+				break
+		if filename is None:
+			filename = available[0]
+			print(f"llama: no preferred quant in {available}, using {filename}.")
+
+		path = os.path.join(models_dir, os.path.basename(filename))
+		url = f"https://huggingface.co/{self.LLAMA_MODEL_REPO}/resolve/main/{filename}"
+		print(f"Downloading {filename} (~1.2GB)...")
+		try:
+			subprocess.check_call(["wget", "-O", path, url])
+		except subprocess.CalledProcessError as e:
+			print(f"llama: model download failed: {e}")
+			if os.path.exists(path):
+				os.remove(path)
+			return None
+
+		# wget exits 0 on a served error page, so check_call alone proves
+		# nothing about what actually landed on disk.
+		size = os.path.getsize(path)
+		if size < self.LLAMA_MODEL_MIN_BYTES:
+			print(f"llama: downloaded {filename} is only {size} bytes — expected ~1.2GB. "
+			      "The server likely returned an error page rather than the model.")
+			os.remove(path)
+			return None
+
+		print(f"llama: model installed to {path}.")
+		return path
+
+	# The unit is generated here rather than shipped as a file: every value in
+	# it is install-specific, and lib/ is gitignored so a template couldn't
+	# live next to the build it describes.
+	LLAMA_SERVICE_NAME = "llama-server.service"
+	LLAMA_SERVICE_UNIT = """[Unit]
+Description=llama-server (offline LLM fallback for the animatronic)
+After=network.target
+
+[Service]
+Type=simple
+User={user}
+# systemd does not source .bashrc, so CUDA has to be on the path here or the
+# CUDA build fails to load libcudart at runtime.
+Environment=PATH={cuda_root}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LD_LIBRARY_PATH={cuda_root}/lib64
+ExecStart={binary} -m {model_path} -ngl 99 -c 2048 --jinja --host 127.0.0.1 --port {port}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+	def _install_llama_service(self, binary: str, model_path: str, cuda_root: str) -> None:
+		unit = self.LLAMA_SERVICE_UNIT.format(
+			user=os.environ.get("SUDO_USER", "kermit"),
+			cuda_root=cuda_root,
+			binary=binary,
+			model_path=model_path,
+			port=self.LLAMA_PORT,
+		)
+
+		staged = os.path.join(tempfile.gettempdir(), self.LLAMA_SERVICE_NAME)
+		destination = f"/etc/systemd/system/{self.LLAMA_SERVICE_NAME}"
+		try:
+			with open(staged, "w") as f:
+				f.write(unit)
+			subprocess.check_call(["sudo", "cp", staged, destination])
+			subprocess.check_call(["sudo", "systemctl", "daemon-reload"])
+			# Re-run replaces the unit, so restart rather than start — enable
+			# --now is a no-op on an already-running service and would leave
+			# the old paths live.
+			subprocess.check_call(["sudo", "systemctl", "enable", self.LLAMA_SERVICE_NAME])
+			subprocess.check_call(["sudo", "systemctl", "restart", self.LLAMA_SERVICE_NAME])
+		except (subprocess.CalledProcessError, OSError) as e:
+			print(f"llama: could not install the service: {e}")
+			return
+		finally:
+			if os.path.exists(staged):
+				os.remove(staged)
+
+		# A unit that fails to load its model exits after ~1s and is then
+		# restarted, so an immediate is-active check reports "activating" and
+		# looks like success. Model load itself takes a few seconds. Wait past
+		# both before believing it.
+		print("llama: waiting for the service to settle...")
+		time.sleep(20)
+		result = subprocess.run(
+			["systemctl", "is-active", self.LLAMA_SERVICE_NAME],
+			capture_output=True, text=True,
+		)
+		if result.stdout.strip() != "active":
+			print(f"llama: service is not running (state: {result.stdout.strip()}). "
+			      "Check: journalctl -u llama-server -n 40")
+			return
+
+		print(f"llama-server installed at {destination} and running on "
+		      f"127.0.0.1:{self.LLAMA_PORT}.")
 
 	def setup_openwakeword_models(self) -> None:
 		"""Download openWakeWord base models and install custom hey_kermit model."""
@@ -233,11 +445,11 @@ class Setup:
 	def setup_bashrc(self) -> None:
 		"""Add required environment variables to ~/.bashrc if not already present."""
 		bashrc = os.path.expanduser("~/.bashrc")
-		# The CUDA exports were needed by the whisper.cpp GPU build. sherpa-onnx
-		# runs the int8 model on CPU (quantized ops don't map to the CUDA
-		# execution provider), so nothing in the STT path needs these now.
-		# They're kept because they're harmless and other tooling may rely on
-		# them; safe to drop if you confirm nothing else does.
+		# The CUDA exports are required by the llama.cpp build in setup_llama —
+		# without them cmake won't find nvcc. Nothing in the STT path needs
+		# them any more (sherpa-onnx runs the int8 model on CPU), so do not
+		# drop them on that basis. llama-server itself gets its CUDA paths
+		# from the systemd unit, not from here.
 		exports = [
 			"export PATH=/usr/local/cuda/bin:$PATH",
 			"export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH",
