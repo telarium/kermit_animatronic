@@ -6,7 +6,7 @@ import threading
 import time
 import numpy as np
 import sherpa_onnx
-import audio_setup
+import mic_stream
 from pydispatch import dispatcher
 
 
@@ -28,7 +28,7 @@ class SpeechToText:
 		"lib/sherpa_onnx/models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
 	)
 
-	SAMPLE_RATE = audio_setup.MIC_RATE
+	SAMPLE_RATE = mic_stream.MIC_RATE
 
 	# Orin Nano has 6 Cortex-A78AE cores. 4 leaves headroom for the wakeword
 	# session, the web server, and the animation/movement threads.
@@ -191,7 +191,7 @@ class SpeechToText:
 			# Subscribe BEFORE draining the ring buffer, so audio arriving
 			# between the two calls lands in the queue rather than falling
 			# down the gap between them.
-			q = audio_setup.subscribe_mic()
+			q = mic_stream.subscribe()
 
 			stream = self._recognizer.create_stream()
 			deadline = time.monotonic() + self.PRESPEECH_TIMEOUT_S
@@ -204,7 +204,7 @@ class SpeechToText:
 			# starting up. This is what recovers the missing first word, and
 			# it warms the encoder's left-context cache. Capped so a stale or
 			# unreset anchor can't drag in a long stretch of history.
-			preroll = audio_setup.mic_audio_since_anchor(
+			preroll = mic_stream.audio_since_anchor(
 				self.MAX_PREROLL_SECONDS, self.ANCHOR_LEAD_SECONDS
 			)
 			if preroll.size:
@@ -286,7 +286,7 @@ class SpeechToText:
 			print(f"SpeechToText: capture/decode error: {e}")
 		finally:
 			if q is not None:
-				audio_setup.unsubscribe_mic(q)
+				mic_stream.unsubscribe(q)
 			self._listening = False
 
 		# text is already stripped at the endpoint check above — deliberately

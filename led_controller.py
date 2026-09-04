@@ -26,14 +26,14 @@ Configuration comes from the character JSON, e.g.
 		"fps":            20
 	}
 
-All device access happens on the worker thread. State changes are queued and
-coalesced, so a caller on the audio path never blocks on USB.
+All device access happens on the worker thread, through the shared
+respeaker.ReSpeaker handle rather than a private one — the DSP settings and the
+LED ring are the same control endpoint. State changes are queued and coalesced,
+so a caller on the audio path never blocks on USB.
 """
 
-import importlib.util
 import json
 import math
-import os
 import queue
 import threading
 import time
@@ -41,7 +41,7 @@ from typing import Optional
 
 from pydispatch import dispatcher
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+import respeaker
 
 # LED_EFFECT values, from the XVF3800 control table.
 EFFECT_OFF      = 0
@@ -55,24 +55,6 @@ RING_LED_COUNT  = 12
 GAMMA           = 2.2
 
 
-def _import_xvf_host():
-	"""xvf_host.py lives at the repo root, but setup.py also clones a copy
-	under lib/respeaker. Prefer whichever is importable."""
-	try:
-		import xvf_host
-		return xvf_host
-	except ImportError:
-		pass
-
-	cloned = os.path.join(_BASE_DIR, "lib", "respeaker", "python_control", "xvf_host.py")
-	if os.path.isfile(cloned):
-		spec = importlib.util.spec_from_file_location("xvf_host", cloned)
-		module = importlib.util.module_from_spec(spec)
-		spec.loader.exec_module(module)
-		return module
-	return None
-
-
 class LEDController:
 	STATE_OFF       = "off"
 	STATE_LISTENING = "listening"
@@ -84,7 +66,7 @@ class LEDController:
 	DEFAULT_BREATH_FLOOR  = 0.05   # never fully dark, so the ring stays present
 	DEFAULT_FPS           = 20
 
-	def __init__(self, hardware_path: str) -> None:
+	def __init__(self, hardware_path: str, device=None) -> None:
 		self.color         = self.DEFAULT_COLOR
 		self.brightness    = self.DEFAULT_BRIGHTNESS
 		self.breath_period = self.DEFAULT_BREATH_PERIOD
@@ -92,16 +74,14 @@ class LEDController:
 		self.fps           = self.DEFAULT_FPS
 		self.apply_config(hardware_path)
 
-		self._xvf = _import_xvf_host()
-		if self._xvf is None:
-			print("LEDController: xvf_host not importable, LED control disabled.")
+		self._device = device if device is not None else respeaker.get_device()
+		if not self._device.available:
+			print("LEDController: no ReSpeaker control available, LED control disabled.")
 
-		self._device = None
 		self._state = self.STATE_OFF
 		self._anim_start = 0.0
 		self._queue: queue.Queue = queue.Queue()
 		self._stop_event = threading.Event()
-		self._warned_missing = False
 
 		self._thread = threading.Thread(target=self._worker, daemon=True)
 		self._thread.start()
@@ -188,48 +168,9 @@ class LEDController:
 		b = int((self.color & 0xFF) * scale)
 		return (r << 16) | (g << 8) | b
 
-	def _connect(self) -> bool:
-		"""Open the ReSpeaker if it isn't already open. Failures are expected
-		while usb_monitor is rebooting the device, so they are quiet after the
-		first warning."""
-		if self._device is not None:
-			return True
-		if self._xvf is None:
-			return False
-		try:
-			self._device = self._xvf.find()
-		except Exception:
-			self._device = None
-
-		if self._device is None:
-			if not self._warned_missing:
-				print("LEDController: ReSpeaker not found, LED updates will retry.")
-				self._warned_missing = True
-			return False
-
-		self._warned_missing = False
-		return True
-
-	def _disconnect(self) -> None:
-		if self._device is not None:
-			try:
-				self._device.close()
-			except Exception:
-				pass
-			self._device = None
-
 	def _write(self, name: str, values: list) -> bool:
-		"""Single point of USB failure handling: drop the handle so the next
-		update reconnects. The device disappears whenever it reboots."""
-		if not self._connect():
-			return False
-		try:
-			self._device.write(name, values)
-			return True
-		except Exception as e:
-			print(f"LEDController: write {name} failed ({e}), will reconnect.")
-			self._disconnect()
-			return False
+		"""Reconnection and USB failure handling belong to the shared device."""
+		return self._device.write(name, values)
 
 	def _enter_state(self, state: str) -> None:
 		if state == self.STATE_OFF:
@@ -281,5 +222,4 @@ class LEDController:
 
 			if self._stop_event.is_set() and self._queue.empty():
 				self._write("LED_EFFECT", [EFFECT_OFF])
-				self._disconnect()
 				return

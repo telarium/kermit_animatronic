@@ -5,11 +5,10 @@ import sys
 import time
 import warnings
 import subprocess
-import usb_monitor
-import audio_setup
-import pygame
 
-# Suppress noise — must be before any imports that touch audio
+# Suppress noise — must be set before any import that touches audio, pygame
+# included: it reads PYGAME_HIDE_SUPPORT_PROMPT at import time, so setting it
+# after the import had no effect.
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'alsa'
@@ -19,6 +18,12 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
 warnings.filterwarnings("ignore")
 
+import usb_monitor
+import audio_setup
+import mic_stream
+import respeaker
+import pygame
+
 # Suppress all stderr noise (ALSA, onnxruntime, pyaudio) during startup
 _devnull = open(os.devnull, 'w')
 _old_stderr = os.dup(2)
@@ -27,7 +32,7 @@ os.dup2(_devnull.fileno(), 2)
 # Init pygame mixer — playback runs through the on-board APE card driving the
 # PCM5102 I2S DAC. Route the AHUB crossbar (does not survive reboot) and locate
 # the APE device, retrying until it's ready. The ReSpeaker USB mic is handled
-# separately (init_respeaker / speech_to_text) and is input-only.
+# separately (respeaker / mic_stream) and is input-only.
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
 
 for attempt in range(30):
@@ -46,7 +51,7 @@ else:
 	print("Audio: APE audio device not found after 30 attempts. Exiting.")
 	sys.exit(1)
 
-usb_monitor.init_respeaker()
+respeaker.initialize()
 
 # Now safe to import everything else
 import signal
@@ -283,7 +288,7 @@ class Kermit:
 				self.stt.shutdown()
 
 			# Close the shared capture stream so arecord doesn't outlive us.
-			audio_setup.stop_mic()
+			mic_stream.stop()
 
 			for thread in threading.enumerate():
 				if thread is not threading.main_thread():
@@ -408,18 +413,18 @@ class Kermit:
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
 		if bPlaying:
-			audio_setup.set_mic_muted(True)
+			mic_stream.set_muted(True)
 			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.wakeword.set_enabled(False)
 		else:
-			audio_setup.set_mic_muted(False)
+			mic_stream.set_muted(False)
 			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
 			if self._awaiting_followup:
 				# Straight back to listening rather than idle.
 				self.led_controller.set_state(LEDController.STATE_LISTENING)
 				def delayed_listen():
 					dispatcher.send(signal="animationStart", name="wakeword")
-					audio_setup.set_mic_anchor()
+					mic_stream.set_anchor()
 					time.sleep(0.5)
 					print("Kermit: awaiting follow-up response, listening...")
 					self.stt.listen_once()

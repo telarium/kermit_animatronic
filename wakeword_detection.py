@@ -5,17 +5,11 @@ import threading
 import time
 import numpy as np
 from pydispatch import dispatcher
-import audio_setup
+import mic_stream
 from openwakeword.model import Model
 
 
 class WakeWord:
-	XVF_PY  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/respeaker/python_control/xvf_host.py")
-
-	CHUNK    = 1280
-	CHANNELS = 2
-	RATE     = 16000
-
 	def __init__(self, model_path: str, description: str, on_detected=None):
 		self.model_path = model_path
 		self.description = description
@@ -97,7 +91,7 @@ class WakeWord:
 		"""
 		q = None
 		try:
-			q = audio_setup.subscribe_mic()
+			q = mic_stream.subscribe()
 			while not self._stop_event.is_set():
 				try:
 					# Timeout rather than block forever, so _stop_event is
@@ -114,7 +108,7 @@ class WakeWord:
 					# Timestamp detection so STT can pull the audio that
 					# follows it out of the ring buffer, including whatever
 					# was said while the acknowledgement animation played.
-					audio_setup.set_mic_anchor()
+					mic_stream.set_anchor()
 					self._stop_event.set()
 					self._enabled = False
 					self._oww.reset()
@@ -126,7 +120,7 @@ class WakeWord:
 			print(f"WakeWord: error in listen loop: {e}")
 		finally:
 			if q is not None:
-				audio_setup.unsubscribe_mic(q)
+				mic_stream.unsubscribe(q)
 			self._stopped_event.set()
 			print("WakeWord: listen loop exited.")
 
