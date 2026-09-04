@@ -206,8 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-en_US-ryan-low.json
-en_US-ryan-low.onnx
 
 
 # =============================================================================
@@ -224,6 +222,12 @@ en_US-ryan-low.onnx
 # stay out of git on their own rules.
 lib/respeaker/
 lib/sherpa_onnx/
+lib/llama/
+
+# GGUF weights for the offline LLM. NOT under lib/, so not covered by the
+# lib/ rule above — llama.cpp ships vocab-only test fixtures in its own
+# models/ dir, so setup.py keeps the real model at the repo root instead.
+models/
 
 # pl2303 kernel module (keep source, ignore build artifacts)
 !lib/pl2303/
