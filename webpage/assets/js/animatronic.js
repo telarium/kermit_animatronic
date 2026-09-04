@@ -84,10 +84,15 @@ socket.on('statusUpdate', ({ id, value }) => updateStatus(id, value));
 // the server (WiFi is excluded server-side — it has its own popup).
 let animatronicConfig = {};
 
-// LLMContext lives in the [LLM] section but is shown at the top of the
-// editor under the friendlier label "AI Context".
+// These live in the [LLM] section but are pinned to the top of the editor
+// under friendlier labels. LLMContextShort is used only on the offline path.
 const AI_CONTEXT_SECTION = 'LLM';
 const AI_CONTEXT_KEY = 'LLMContext';
+const AI_CONTEXT_SHORT_KEY = 'LLMContextShort';
+const PINNED_CONTEXT_FIELDS = [
+	{ key: AI_CONTEXT_KEY, title: 'AI Context' },
+	{ key: AI_CONTEXT_SHORT_KEY, title: 'AI Context (Offline)' },
+];
 
 socket.on('configLoaded', (data) => {
 	animatronicConfig = data || {};
@@ -144,20 +149,24 @@ function buildConfigEditor() {
 		return;
 	}
 
-	// AI Context on top
+	// AI Context fields on top
 	const llmSection = animatronicConfig[AI_CONTEXT_SECTION];
-	if (llmSection && AI_CONTEXT_KEY in llmSection) {
-		appendConfigSectionTitle(container, 'AI Context');
-		appendConfigField(container, AI_CONTEXT_SECTION, AI_CONTEXT_KEY, llmSection[AI_CONTEXT_KEY], {
-			textarea: true,
-			label: null, // section title already says it
+	if (llmSection) {
+		PINNED_CONTEXT_FIELDS.forEach(({ key, title }) => {
+			if (!(key in llmSection)) return;
+			appendConfigSectionTitle(container, title);
+			appendConfigField(container, AI_CONTEXT_SECTION, key, llmSection[key], {
+				textarea: true,
+				label: null, // section title already says it
+			});
 		});
 	}
 
 	// Everything else, in the order the server sent it
 	sections.forEach(section => {
 		const keys = Object.keys(animatronicConfig[section]).filter(
-			key => !(section === AI_CONTEXT_SECTION && key === AI_CONTEXT_KEY)
+			key => !(section === AI_CONTEXT_SECTION
+				&& PINNED_CONTEXT_FIELDS.some(field => field.key === key))
 		);
 		if (keys.length === 0) return;
 
