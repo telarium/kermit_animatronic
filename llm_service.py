@@ -18,7 +18,7 @@ class LLM:
 	# the thread long before 20 exchanges.
 	FALLBACK_HISTORY_TURNS = 3
 
-	CLOUD_TIMEOUT_S = 8.0
+	CLOUD_TIMEOUT_S = 20
 	MIN_ATTEMPT_S = 0.5  # below this there isn't time for a useful attempt
 
 	FALLBACK_URL = "http://127.0.0.1:8081"
