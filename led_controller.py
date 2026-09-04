@@ -177,17 +177,12 @@ class LEDController:
 			self._write("LED_EFFECT", [EFFECT_OFF])
 
 		elif state == self.STATE_LISTENING:
-			# The firmware's DOA effect works, so let it do the tracking.
-			# Base colour black leaves only the LED aimed at the talker lit.
-			self._write("LED_DOA_COLOR", [0x000000, self.color])
-			self._write("LED_EFFECT", [EFFECT_DOA])
+			self._write("LED_GAMMIFY", [0])
+			self._write("LED_EFFECT", [EFFECT_SINGLE])
+			self._write("LED_COLOR", [self._scaled_color(1.0)])
 
 		elif state == self.STATE_THINKING:
-			# Software-driven breath. Firmware 2.0.6 does not light the ring in
-			# LED_RING_COLOR mode and its own breath effect ignores LED_SPEED,
-			# so the envelope is written into LED_COLOR while the device stays
-			# in single-colour mode. Firmware gamma off — _scaled_color already
-			# applies a curve, and doubling up crushes the low end.
+			# Software-driven breath.
 			self._write("LED_GAMMIFY", [0])
 			self._write("LED_EFFECT", [EFFECT_SINGLE])
 			self._anim_start = time.monotonic()
