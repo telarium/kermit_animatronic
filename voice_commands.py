@@ -158,7 +158,9 @@ class VoiceCommandHandler:
 			      f"(reads {datetime.now():%Y-%m-%d %H:%M}).")
 		print("VoiceCommandHandler: initialized.")
 
-	def parse(self, transcript: str) -> bool:
+	FOLLOWUP_INTENTS = ("stop",)	
+
+	def parse(self, transcript: str, followup: bool = False) -> bool:
 		"""
 		Attempt to detect a command in the transcript.
 		Returns True if a confident match was found and handled, False otherwise.
@@ -176,10 +178,14 @@ class VoiceCommandHandler:
 			return True
 
 		# 3. Fuzzy match against all intent phrases
-		phrase_strings = [p[0] for p in self._phrase_map]
-		match = process.extractOne(text, phrase_strings, scorer=fuzz.ratio)
+		phrase_map = self._phrase_map
+		if followup:
+			phrase_map = [(p, n) for p, n in phrase_map if n in self.FOLLOWUP_INTENTS]
+		phrase_strings = [p[0] for p in phrase_map]
+
+		match = process.extractOne(text, phrase_strings, scorer=fuzz.ratio) if phrase_strings else None
 		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
-			intent_name = next(name for phrase, name in self._phrase_map if phrase == match[0])
+			intent_name = next(name for phrase, name in phrase_map if phrase == match[0])
 			print(f"VoiceCommandHandler: matched intent='{intent_name}' phrase='{match[0]}' score={match[1]}")
 			self._dispatch_intent(intent_name)
 			return True
