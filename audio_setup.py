@@ -221,8 +221,14 @@ class _MicStream:
 		"""Mark 'now' as the point a consumer will later want audio from."""
 		self._anchor = time.monotonic()
 
-	def audio_since_anchor(self, max_seconds: float = 2.0):
+	def audio_since_anchor(self, max_seconds: float = 2.0, lead_seconds: float = 0.0):
 		"""Return mono int16 audio captured since the last set_anchor().
+
+		lead_seconds starts the window slightly BEFORE the anchor. openwakeword
+		confirms a phrase a few hundred ms after it ends, so with a lead of
+		zero anything said in that gap sits in the ring but falls outside the
+		window and is discarded — which is exactly the audio a fast speaker
+		runs the command into.
 
 		Capped at max_seconds so a slow handler, or an anchor nobody reset,
 		can't drag a long stretch of history into the recognizer.
@@ -231,8 +237,9 @@ class _MicStream:
 
 		if self._anchor == 0.0:
 			return np.zeros(0, dtype=np.int16)
+		start = self._anchor - max(lead_seconds, 0.0)
 		with self._ring_lock:
-			chunks = [c for ts, c in self._ring if ts >= self._anchor]
+			chunks = [c for ts, c in self._ring if ts >= start]
 		if not chunks:
 			return np.zeros(0, dtype=np.int16)
 		audio = np.concatenate(chunks)
@@ -366,9 +373,9 @@ def set_mic_anchor() -> None:
 	_get_mic().set_anchor()
 
 
-def mic_audio_since_anchor(max_seconds: float = 2.0):
+def mic_audio_since_anchor(max_seconds: float = 2.0, lead_seconds: float = 0.0):
 	"""Audio captured since set_mic_anchor(), as mono int16."""
-	return _get_mic().audio_since_anchor(max_seconds)
+	return _get_mic().audio_since_anchor(max_seconds, lead_seconds)
 
 
 def set_mic_muted(muted: bool) -> None:
