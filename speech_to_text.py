@@ -66,6 +66,11 @@ class SpeechToText:
 	# reach back into whatever was playing before this turn.
 	MAX_PREROLL_SECONDS = 2.0
 
+	# Reach back before the anchor to cover openwakeword's confirmation delay.
+	# A wakeword tail that leaks in is handled by _strip_wakeword; a clipped
+	# command is not recoverable. The mic ring is 4s, so this fits comfortably.
+	ANCHOR_LEAD_SECONDS = 0.5
+
 	# Leading wakeword fragments to strip from a transcript. openwakeword
 	# normally fires at the end of the phrase, but it can trigger a beat early
 	# and leave part of it in the preroll.
@@ -198,10 +203,13 @@ class SpeechToText:
 			# starting up. This is what recovers the missing first word, and
 			# it warms the encoder's left-context cache. Capped so a stale or
 			# unreset anchor can't drag in a long stretch of history.
-			preroll = audio_setup.mic_audio_since_anchor(self.MAX_PREROLL_SECONDS)
+			preroll = audio_setup.mic_audio_since_anchor(
+				self.MAX_PREROLL_SECONDS, self.ANCHOR_LEAD_SECONDS
+			)
 			if preroll.size:
 				print(f"SpeechToText: priming with "
-				      f"{preroll.size / self.SAMPLE_RATE:.2f}s of preroll.")
+				      f"{preroll.size / self.SAMPLE_RATE:.2f}s of preroll "
+				      f"(level {int(np.abs(preroll).mean())}).")
 				stream.accept_waveform(
 					self.SAMPLE_RATE, preroll.astype(np.float32) / 32768.0
 				)
