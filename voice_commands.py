@@ -13,7 +13,7 @@ class VoiceCommandHandler:
 		"sing": [
 			"sing a song", "sing for me", "play something", "play music", "sing music",
 			"entertain me", "hit it", "sing something", "play something for me",
-			"give me a song", "do a song", "let's hear some music", "singh", "clay"
+			"give me a song", "do a song", "let's hear some music", "singh", "clay", "play a song"
 		],
 		"stop": [
 			"stop", "stop music", "stop please", "stop singing", "be quiet", "that's enough",
@@ -46,7 +46,7 @@ class VoiceCommandHandler:
 		],
 		"get_date": [
 			"what's the date", "what is the date", "what's today's date", "the date",
-			"what is today's date", "tell me the date", "the date today",
+			"what is today's date", "tell me the date", "the date today", "what's the current date"
 		],
 		"get_year": [
 			"what year is it", "what's the year", "what is the year",
@@ -375,7 +375,7 @@ class VoiceCommandHandler:
 				f"Oh, I'm hooked up to {ssid}",
 				f"My wifi network is {ssid}",
 			]
-			dispatcher.send(signal="executeTTS", text=random.choice(responses))
+			dispatcher.send(signal="executeTTS", text=random.choice(responses), bForceOffline=True)
 		else:
 			dispatcher.send(signal="playVoiceFile", file="no_connection.ogg")
 
