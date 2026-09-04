@@ -347,11 +347,10 @@ class Kermit:
 		self.web_server.broadcast('movementKeyActivated', {"key": str(key).lower(), "on": bool(on)})
 
 	def on_wakeword_event(self) -> None:
-		# Set outside the thread so the ring responds immediately rather than
-		# after wait_until_stopped.
 		self.led_controller.set_state(LEDController.STATE_LISTENING)
 		def handle():
 			self.show_player.stop_show()
+			audio_setup.wake_dac_if_needed(pygame)
 			dispatcher.send(signal="animationStart", name="wakeword")
 			if not self.wakeword.wait_until_stopped(timeout=4.0):
 				print("WakeWord: timed out waiting for listen loop to exit, proceeding anyway.")
@@ -368,7 +367,7 @@ class Kermit:
 			self.movements.reset_all()
 			return
 		print(f"Heard: {text}")
-		if self._awaiting_followup or not self.voiceCommandHandler.parse(text):
+		if not self.voiceCommandHandler.parse(text, followup=self._awaiting_followup):
 			self._awaiting_followup = False
 			self.llm.send(text)
 			self.wakeword.set_enabled(False)
@@ -377,6 +376,7 @@ class Kermit:
 		else:
 			# Handled locally. If it plays audio the LEDs are picked up again
 			# by on_voice_playback_event; if it plays nothing, this is the end.
+			self._awaiting_followup = False
 			dispatcher.send(signal="animationStop")
 			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.wakeword.set_enabled(True)
