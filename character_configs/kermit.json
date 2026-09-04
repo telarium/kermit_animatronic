@@ -5,8 +5,8 @@
 	},
 	"piper": {
 		"directory": "lib/piper/kermit/",
-		"length_scale": 1.5,
-		"volume": 0.7
+		"speed": 1.5,
+		"volume": 0.6
 	},
 	"voice_directory": "voices/kermit/",
 	"animation_directory": "animations/kermit/",
