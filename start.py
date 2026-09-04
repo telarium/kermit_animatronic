@@ -385,10 +385,11 @@ class Kermit:
 		"""bForceOffline bypasses ElevenLabs and speaks with the Piper voice."""
 		if text.endswith("[?]"):
 			self._awaiting_followup = True
-			text = text[:-4].strip()
+			text = text[:-3].rstrip()
+			print("Response: {} [?]".format(text))
 		else:
 			self._awaiting_followup = False
-		print(f"Response: {text}")
+			print(f"Response: {text}")
 		self.tts.speak(text, bForceOffline)
 
 	def on_voice_play(self, file: str) -> None:
