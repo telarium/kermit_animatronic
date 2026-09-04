@@ -3,6 +3,7 @@ import configparser
 import glob
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -14,6 +15,36 @@ from typing import Optional
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Sanitization applied to every line before synthesis, on both the cloud and
+# offline paths. Raw text still reaches the logs and the web UI upstream of
+# here — this is only what the voice actually says.
+_STAGE_DIRECTIONS_RE = re.compile(r"\*[^*]*\*")
+# Folded rather than dropped: deleting a curly apostrophe turns "don't" into
+# "dont", which Piper duly pronounces.
+_UNICODE_FOLD = {
+	"\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+	"\u201c": '"', "\u201d": '"', "\u201e": '"',
+	"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+	"\u2014": " - ", "\u2015": " - ",
+	"\u2026": "...", "\u00a0": " ",
+	# Expanded rather than dropped — the offline path never sees the
+	# CONTEXT_POSTFIX instruction to spell these out.
+	"%": " percent ", "&": " and ", "+": " plus ",
+}
+_DISALLOWED_RE = re.compile(r"[^A-Za-z0-9\s.,!?'\";:()\-]")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def sanitize_for_speech(text: str) -> str:
+	"""Reduce a reply to what a voice can actually pronounce."""
+	if not text:
+		return ""
+	text = _STAGE_DIRECTIONS_RE.sub(" ", text)
+	for source, replacement in _UNICODE_FOLD.items():
+		text = text.replace(source, replacement)
+	text = _DISALLOWED_RE.sub("", text)
+	return _WHITESPACE_RE.sub(" ", text).strip()
 
 
 class TextToSpeech:
@@ -152,12 +183,23 @@ class TextToSpeech:
 					pass
 
 	def _speak(self, text: str, bForceOffline: bool = False) -> None:
+		raw = text
+		text = sanitize_for_speech(text)
+		if text != raw:
+			print(f"TextToSpeech: sanitized -> {text!r}")
+		if not text:
+			print("TextToSpeech: nothing speakable left after sanitizing.")
+			return
+		started = time.monotonic()
 		if not bForceOffline:
 			if self._speak_elevenlabs(text):
+				print(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
 				return
 			print("TextToSpeech: falling back to the offline voice.")
 		if not self._speak_piper(text):
 			print("TextToSpeech: no voice available — nothing spoken.")
+			return
+		print(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
 
 	def _speak_elevenlabs(self, text: str) -> bool:
 		"""Returns True only if audio was produced and dispatched."""
