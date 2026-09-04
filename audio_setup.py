@@ -135,7 +135,7 @@ def note_playback() -> None:
 # means STT can be handed the audio from BEFORE it started listening.
 
 MIC_RATE = 16000
-MIC_CHANNELS = 2
+MIC_CHANNELS = 1
 # 1280 frames = 80ms at 16kHz. This is openwakeword's required chunk size, and
 # sherpa-onnx accepts any size, so a single granularity serves both consumers.
 MIC_CHUNK_FRAMES = 1280
