@@ -45,7 +45,7 @@ class VoiceCommandHandler:
 			"which month is it", "what month are we in",
 		],
 		"get_date": [
-			"what's the date", "what is the date", "what's today's date",
+			"what's the date", "what is the date", "what's today's date", "the date",
 			"what is today's date", "tell me the date", "the date today",
 		],
 		"get_year": [
