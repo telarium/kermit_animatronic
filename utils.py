@@ -1,11 +1,17 @@
 """Shared helper functions for the animatronic project.
 
-Currently holds the config-file (INI) read/write helpers used by the
-web-based config editor: reading config.cfg into a dict for broadcast
-to the webpage, and writing edited values back without disturbing the
-file's comments and formatting.
+Holds the config-file (INI) read/write helpers used by the web-based config
+editor, and the USB/local storage resolution used at startup and whenever a
+drive is plugged in.
+
+Storage rule: a USB drive carrying a valid config is the source of truth for
+both the config and the shows, and everything on it is backed up to the local
+directory next to start.py. With no drive attached, that local backup is used
+instead. A drive attached WITHOUT a config is restored from the backup and
+then becomes the source of truth.
 """
 
+import glob
 import os
 import re
 import configparser
@@ -13,6 +19,14 @@ import configparser
 
 CONFIG_FILENAME = "config.cfg"
 TEMPLATE_FILENAME = "config_template.cfg"
+SHOWS_DIRNAME = "shows"
+
+# Ceiling on the local shows backup. The SSD also holds the models and the
+# llama.cpp build, so the backup is not allowed to grow without bound.
+MAX_LOCAL_SHOWS_BYTES = 1024 * 1024 * 1024
+
+# Copied to the USB root when a drive is restored from the local backup.
+DOCUMENT_EXTENSIONS = (".doc", ".docx")
 
 
 # Matches a "Key = value" line, capturing indent, key, separator, and value.
@@ -56,47 +70,40 @@ def copy_file_if_different(src: str, dst: str) -> bool:
 	return True
 
 
-def resolve_config(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_config_path: str = "") -> str:
-	"""Decide which config file to use, and keep the local/USB copies in sync.
+def find_usb_config(usb_mount_point: str, usb_config_path: str = "") -> str:
+	"""Return the path of a valid config at the USB root, or None.
 
-	Priority:
-	1. A valid config on the USB drive — used, and backed up to the local
-	   directory as a validated known-good copy.
-	2. A valid local config — used; if a USB drive is attached but has no
-	   config, the local one is copied onto it.
-	3. Neither — bootstrap a fresh config from config_template.cfg into the
-	   local directory and onto the USB drive (if attached).
+	config.cfg is preferred, but any .cfg on the drive is accepted, since the
+	USB monitor reports whatever it finds and the file is not always named
+	config.cfg. usb_config_path is that explicitly discovered path."""
+	candidates = []
+	if usb_config_path:
+		candidates.append(usb_config_path)
+	candidates.append(os.path.join(usb_mount_point, CONFIG_FILENAME))
+	candidates.extend(sorted(glob.glob(os.path.join(usb_mount_point, "*.cfg"))))
 
-	usb_config_path allows the USB monitor to pass an explicitly discovered
-	.cfg path (which may not be named config.cfg). Returns the path to load,
-	or None if no config could be found or created."""
+	seen = set()
+	for path in candidates:
+		abs_path = os.path.abspath(path)
+		if abs_path in seen or not os.path.exists(path):
+			continue
+		seen.add(abs_path)
+		valid, err = validate_config(path)
+		if valid:
+			return path
+		print(f"Config: USB config '{path}' is invalid ({err}); ignoring it.")
+	return None
+
+
+def ensure_local_config(base_dir: str) -> str:
+	"""Return a valid local config path, bootstrapping from the template if
+	the file is missing or unusable. Returns None if neither is possible."""
 	local_cfg = os.path.join(base_dir, CONFIG_FILENAME)
 	template = os.path.join(base_dir, TEMPLATE_FILENAME)
-	default_usb_cfg = os.path.join(usb_mount_point, CONFIG_FILENAME)
-	usb_cfg = usb_config_path or default_usb_cfg
 
-	# 1. Valid USB config wins; mirror it locally as a known-good backup.
-	if usb_mounted and os.path.exists(usb_cfg):
-		valid, err = validate_config(usb_cfg)
-		if valid:
-			try:
-				if copy_file_if_different(usb_cfg, local_cfg):
-					print(f"Config: backed up USB config to {local_cfg}")
-			except OSError as e:
-				print(f"Config: could not back up USB config locally: {e}")
-			return usb_cfg
-		print(f"Config: USB config '{usb_cfg}' is invalid ({err}); ignoring it.")
-
-	# 2. Valid local config; seed the USB drive if it has none.
 	if os.path.exists(local_cfg):
 		valid, err = validate_config(local_cfg)
 		if valid:
-			if usb_mounted and not os.path.exists(default_usb_cfg):
-				try:
-					copy_file_if_different(local_cfg, default_usb_cfg)
-					print(f"Config: copied local config to USB drive at {default_usb_cfg}")
-				except OSError as e:
-					print(f"Config: could not copy config to USB drive: {e}")
 			return local_cfg
 		print(f"Config: local config '{local_cfg}' is invalid ({err}).")
 		# Preserve the broken file for inspection before the template replaces it.
@@ -106,32 +113,166 @@ def resolve_config(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_c
 		except OSError as e:
 			print(f"Config: could not move invalid config aside: {e}")
 
-	# 3. Bootstrap fresh configs from the template.
 	if not os.path.exists(template):
 		print(f"Config: template '{template}' not found; cannot create a config.")
 		return None
-	result = None
 	try:
 		copy_file_if_different(template, local_cfg)
-		print(f"Config: created {local_cfg} from template.")
-		result = local_cfg
 	except OSError as e:
 		print(f"Config: could not create local config from template: {e}")
-	if usb_mounted and not os.path.exists(default_usb_cfg):
+		return None
+	print(f"Config: created {local_cfg} from template.")
+	return local_cfg
+
+
+def _directory_size(path: str) -> int:
+	"""Total size in bytes of the files directly inside path."""
+	total = 0
+	try:
+		for name in os.listdir(path):
+			file_path = os.path.join(path, name)
+			if os.path.isfile(file_path):
+				total += os.path.getsize(file_path)
+	except OSError:
+		pass
+	return total
+
+
+def copy_new_files(src_dir: str, dst_dir: str, max_bytes: int = None) -> int:
+	"""Copy files from src_dir that dst_dir doesn't already have, returning
+	the number copied. Existing files are never overwritten — this is a
+	backup, not a mirror, so nothing already saved is disturbed.
+
+	max_bytes caps the total size of dst_dir; files that would push it over
+	are skipped rather than truncating the copy at the first one that
+	doesn't fit."""
+	if not os.path.isdir(src_dir):
+		return 0
+	try:
+		os.makedirs(dst_dir, exist_ok=True)
+	except OSError as e:
+		print(f"Shows: could not create '{dst_dir}': {e}")
+		return 0
+
+	used = _directory_size(dst_dir) if max_bytes is not None else 0
+	copied = 0
+	for name in sorted(os.listdir(src_dir)):
+		src = os.path.join(src_dir, name)
+		if not os.path.isfile(src):
+			continue
+		dst = os.path.join(dst_dir, name)
+		if os.path.exists(dst):
+			continue
 		try:
-			copy_file_if_different(template, default_usb_cfg)
-			print(f"Config: created {default_usb_cfg} from template.")
-			if result is None:
-				result = default_usb_cfg
+			size = os.path.getsize(src)
+		except OSError:
+			continue
+		if max_bytes is not None and used + size > max_bytes:
+			print(f"Shows: skipping '{name}' — would take the backup past "
+			      f"{max_bytes // (1024 * 1024)}MB.")
+			continue
+		try:
+			copy_file_if_different(src, dst)
 		except OSError as e:
-			print(f"Config: could not create USB config from template: {e}")
-	return result
+			print(f"Shows: could not copy '{name}': {e}")
+			continue
+		used += size
+		copied += 1
+	return copied
+
+
+def copy_documents(src_dir: str, dst_dir: str) -> int:
+	"""Copy any Word documents sitting in src_dir to dst_dir."""
+	copied = 0
+	try:
+		names = sorted(os.listdir(src_dir))
+	except OSError:
+		return 0
+	for name in names:
+		if not name.lower().endswith(DOCUMENT_EXTENSIONS):
+			continue
+		src = os.path.join(src_dir, name)
+		if not os.path.isfile(src):
+			continue
+		try:
+			copy_file_if_different(src, os.path.join(dst_dir, name))
+		except OSError as e:
+			print(f"Restore: could not copy '{name}': {e}")
+			continue
+		copied += 1
+	return copied
+
+
+def resolve_storage(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_config_path: str = "") -> tuple:
+	"""Decide where the config and the shows live, and refresh the backup.
+
+	A USB drive carrying a valid config is the source of truth for both, and
+	its config and shows are backed up locally. Anything else — no drive, or
+	a drive with no usable config — falls back to the local backup. Nothing
+	is ever written to the drive here; that only happens on an explicit
+	restore (see restore_backup_to_usb).
+
+	Returns (config_path, shows_dir, using_usb). config_path is None if no
+	config could be found or created."""
+	local_shows = os.path.join(base_dir, SHOWS_DIRNAME)
+	try:
+		os.makedirs(local_shows, exist_ok=True)
+	except OSError as e:
+		print(f"Shows: could not create '{local_shows}': {e}")
+
+	usb_cfg = find_usb_config(usb_mount_point, usb_config_path) if usb_mounted else None
+	if not usb_cfg:
+		return ensure_local_config(base_dir), local_shows, False
+
+	# USB is the source of truth — back it up locally.
+	try:
+		if copy_file_if_different(usb_cfg, os.path.join(base_dir, CONFIG_FILENAME)):
+			print(f"Config: backed up USB config to {base_dir}")
+	except OSError as e:
+		print(f"Config: could not back up USB config locally: {e}")
+
+	usb_shows = os.path.join(usb_mount_point, SHOWS_DIRNAME)
+	copied = copy_new_files(usb_shows, local_shows, MAX_LOCAL_SHOWS_BYTES)
+	if copied:
+		print(f"Shows: backed up {copied} show file(s) from the USB drive.")
+
+	return usb_cfg, usb_shows, True
+
+
+def restore_backup_to_usb(base_dir: str, usb_mount_point: str, usb_mounted: bool) -> tuple:
+	"""Write the local backup — config, shows, and any Word documents — onto
+	an attached USB drive. Triggered from the web UI only.
+
+	Shows already on the drive are left alone. Returns (success, message)."""
+	if not usb_mounted:
+		return False, "No USB drive is attached."
+
+	local_cfg = ensure_local_config(base_dir)
+	if not local_cfg:
+		return False, "No local config to restore from."
+
+	usb_cfg = os.path.join(usb_mount_point, CONFIG_FILENAME)
+	try:
+		copy_file_if_different(local_cfg, usb_cfg)
+	except OSError as e:
+		return False, f"Could not write the config to the USB drive: {e}"
+
+	local_shows = os.path.join(base_dir, SHOWS_DIRNAME)
+	shows = copy_new_files(local_shows, os.path.join(usb_mount_point, SHOWS_DIRNAME))
+	documents = copy_documents(base_dir, usb_mount_point)
+
+	message = (f"Restored the config, {shows} show file(s) and "
+	           f"{documents} document(s) to the USB drive.")
+	print(f"Restore: {message}")
+	return True, message
 
 
 def sync_config_copies(active_path: str, base_dir: str, usb_mount_point: str, usb_mounted: bool) -> list:
-	"""Mirror the active config file to the other standard location(s):
-	the local directory, and the USB drive if attached. Used after a save
-	so both copies stay identical. Returns a list of error strings."""
+	"""Mirror the active config file to the other standard location(s): the
+	local backup, and the config already on the USB drive. Used after a save
+	so both copies stay identical. A drive with no config of its own is left
+	alone — that is what the restore button is for. Returns a list of error
+	strings."""
 	errors = []
 	active_abs = os.path.abspath(active_path)
 	targets = []
@@ -141,11 +282,11 @@ def sync_config_copies(active_path: str, base_dir: str, usb_mount_point: str, us
 		targets.append(local_cfg)
 
 	if usb_mounted:
-		usb_root = os.path.abspath(usb_mount_point) + os.sep
+		usb_cfg = find_usb_config(usb_mount_point)
 		# If the active config already lives on the USB drive (possibly under
 		# another filename), don't write a second copy next to it.
-		if not active_abs.startswith(usb_root):
-			targets.append(os.path.join(usb_mount_point, CONFIG_FILENAME))
+		if usb_cfg and active_abs != os.path.abspath(usb_cfg):
+			targets.append(usb_cfg)
 
 	for dst in targets:
 		try:

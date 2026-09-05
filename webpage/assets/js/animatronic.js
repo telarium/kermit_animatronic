@@ -90,8 +90,8 @@ const AI_CONTEXT_SECTION = 'LLM';
 const AI_CONTEXT_KEY = 'LLMContext';
 const AI_CONTEXT_SHORT_KEY = 'LLMContextShort';
 const PINNED_CONTEXT_FIELDS = [
-	{ key: AI_CONTEXT_KEY, title: 'AI Context' },
-	{ key: AI_CONTEXT_SHORT_KEY, title: 'AI Context (Offline)' },
+	{ key: AI_CONTEXT_SHORT_KEY, title: 'AI Context (Short)' },
+	{ key: AI_CONTEXT_KEY, title: 'AI Context (Long)' },
 ];
 
 socket.on('configLoaded', (data) => {
@@ -123,6 +123,41 @@ socket.on('configSaveResult', (result) => {
 		const error = result ? result.error : 'unknown error';
 		console.error('Config save failed:', error);
 		setConfigSaveStatus(`Save failed: ${error}`, 'error');
+	}
+});
+
+/**
+ * Ask the server to copy the local backup — config, shows and any Word
+ * documents — onto an attached USB drive. Copying shows takes a while, so
+ * the button is held disabled until the result comes back.
+ */
+function restoreBackupToUSB() {
+	alert('Attempting to restore backed up config and show data to any attached USB drive. Please wait a few minutes...');
+
+	const button = document.getElementById('restoreBackupButton');
+	if (button) {
+		button.disabled = true;
+		button.classList.add('disabled');
+	}
+
+	setConfigSaveStatus('Restoring to USB drive…', '');
+	socket.emit('onRestoreBackup');
+}
+
+socket.on('restoreBackupResult', (result) => {
+	const button = document.getElementById('restoreBackupButton');
+	if (button) {
+		button.disabled = false;
+		button.classList.remove('disabled');
+	}
+
+	if (result && result.success) {
+		console.log('Backup restored.', result.message || '');
+		setConfigSaveStatus(result.message || 'Restored to the USB drive.', 'success');
+	} else {
+		const message = result ? result.message : 'unknown error';
+		console.error('Restore failed:', message);
+		setConfigSaveStatus(`Restore failed: ${message}`, 'error');
 	}
 });
 
@@ -265,6 +300,7 @@ function setupConfigPopupEvents() {
 	const indicator = document.getElementById('configIndicator');
 	const closeButton = document.getElementById('closeConfigPopup');
 	const saveButton = document.getElementById('saveConfigButton');
+	const restoreButton = document.getElementById('restoreBackupButton');
 	const popupOverlay = document.getElementById('configPopup');
 
 	if (indicator) {
@@ -286,6 +322,12 @@ function setupConfigPopupEvents() {
 		saveButton.addEventListener('click', submitConfigSave);
 	} else {
 		console.warn('Save Config Button not found!');
+	}
+
+	if (restoreButton) {
+		restoreButton.addEventListener('click', restoreBackupToUSB);
+	} else {
+		console.warn('Restore Backup Button not found!');
 	}
 
 	if (popupOverlay) {

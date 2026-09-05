@@ -65,30 +65,48 @@ def _watch() -> None:
 
 		elif device.action == 'remove':
 			print(f"USBMonitor: drive removed ({device_name})")
+			# The mount lingers briefly after the device goes, so confirm
+			# before telling the system to fall back to the local backup.
+			threading.Timer(2.0, _check_unmounted).start()
 
 
-def _check_mounted() -> None:
+# Bounded so a boot with no drive attached doesn't retry forever.
+_MOUNT_RETRIES = 10
+
+
+def _check_mounted(attempt: int = 1) -> None:
 	"""Check if the drive mounted successfully and retry if not."""
 	if is_mounted():
 		print(f"USBMonitor: drive mounted at {USB_MOUNT_POINT}")
-		_look_for_config()
-	else:
+		_announce_drive()
+	elif attempt < _MOUNT_RETRIES:
 		print("USBMonitor: drive not yet mounted, retrying...")
-		threading.Timer(2.0, _check_mounted).start()
+		threading.Timer(2.0, _check_mounted, args=(attempt + 1,)).start()
+	else:
+		print("USBMonitor: no drive mounted.")
 
 
-def _look_for_config() -> None:
-	"""Look for a .cfg file on the drive and dispatch its path if found."""
-	matches = glob.glob(f"{USB_MOUNT_POINT}/*.cfg")
-	if matches:
-		cfg_path = matches[0]
+def _check_unmounted() -> None:
+	if is_mounted():
+		return
+	try:
+		dispatcher.send(signal='usbDetached')
+	except Exception as e:
+		print(f"USBMonitor: error dispatching detach: {e}")
+
+
+def _announce_drive() -> None:
+	"""Report the attached drive, along with any .cfg sitting at its root."""
+	matches = sorted(glob.glob(f"{USB_MOUNT_POINT}/*.cfg"))
+	cfg_path = matches[0] if matches else ""
+	if cfg_path:
 		print(f"USBMonitor: config file found: {cfg_path}")
-		try:
-			dispatcher.send(signal='usbConfigFound', path=cfg_path)
-		except Exception as e:
-			print(f"USBMonitor: error dispatching config file: {e}")
 	else:
 		print("USBMonitor: no .cfg file found on drive.")
+	try:
+		dispatcher.send(signal='usbAttached', path=cfg_path)
+	except Exception as e:
+		print(f"USBMonitor: error dispatching drive attach: {e}")
 
 
 # Module-level setup — starts automatically on import

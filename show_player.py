@@ -10,7 +10,6 @@ from pydispatch import dispatcher
 from midi import parse_file as parse_midi_file
 from program_blue import parse_file as parse_shw_file
 
-USB_SHOWS_DIR = "/mnt/usb/shows"
 
 class ShowType(Enum):
 	MIDI = auto()
@@ -37,8 +36,11 @@ class ShowPlayer:
 		self._play_thread: Optional[threading.Thread] = None
 		self._stop_event = threading.Event()
 
+		# Whichever directory the storage layer has made current — the USB
+		# drive's shows when it is the source of truth, the local backup
+		# otherwise. Set by start.py on every config load.
 		script_dir = os.path.dirname(os.path.abspath(__file__))
-		self._local_show_dir = os.path.join(script_dir, "shows")
+		self.show_dir = os.path.join(script_dir, "shows")
 
 		self.get_show_list()
 
@@ -91,16 +93,21 @@ class ShowPlayer:
 			self.paused = False
 			self.pygame.mixer.music.unpause()
 
+	def set_show_directory(self, path: str) -> None:
+		"""Switch to a different show directory and rescan it."""
+		if not path or os.path.abspath(path) == os.path.abspath(self.show_dir):
+			return
+		self.show_dir = path
+		print(f"ShowPlayer: show directory is now '{self.show_dir}'")
+		self.get_show_list()
+
 	def get_show_list(self) -> None:
-		"""Scan all known show directories and build the combined show list."""
+		"""Scan the active show directory and build the show list."""
 		audio_extensions = ('.mp3', '.wav', '.ogg')
 		found: List[str] = []
 
-		dirs_to_scan = [USB_SHOWS_DIR, self._local_show_dir]
-		for directory in dirs_to_scan:
-			if not os.path.isdir(directory):
-				continue
-			files = os.listdir(directory)
+		if os.path.isdir(self.show_dir):
+			files = os.listdir(self.show_dir)
 			files_lower = {f.lower() for f in files}
 			for f in files:
 				# .shw files are self-contained — no sidecar needed.
@@ -115,10 +122,10 @@ class ShowPlayer:
 
 		self.show_list = found
 
-		if found:
-			dispatcher.send(signal="showListLoad", show_list=found)
-		else:
-			print("ShowPlayer: no shows found in any show directory.")
+		if not found:
+			print(f"ShowPlayer: no shows found in '{self.show_dir}'.")
+		# Sent either way, so switching to an empty directory clears the UI.
+		dispatcher.send(signal="showListLoad", show_list=found)
 
 	# -------------------------------------------------------------------------
 	# Internal: show resolution
@@ -130,12 +137,9 @@ class ShowPlayer:
 		Returns (audio_path, events, ShowType) or (None, [], None) on failure.
 		"""
 		audio_extensions = ['.mp3', '.wav', '.ogg']
-		dirs_to_search = [USB_SHOWS_DIR, self._local_show_dir]
+		directory = self.show_dir
 
-		for directory in dirs_to_search:
-			if not os.path.isdir(directory):
-				continue
-
+		if os.path.isdir(directory):
 			# Try ProgramBlue first.
 			shw_path = os.path.join(directory, show_name + '.shw')
 			if os.path.isfile(shw_path):

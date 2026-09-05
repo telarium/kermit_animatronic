@@ -83,6 +83,11 @@ class WebServer:
 		"""Receive config edits from the web UI as {section: {key: value}}."""
 		dispatcher.send(signal="configSave", updates=updates)
 
+	@socketio.on('onRestoreBackup')
+	def restore_backup_event() -> None:
+		"""Copy the local backup onto an attached USB drive."""
+		dispatcher.send(signal="restoreBackup")
+
 	def __init__(self, html_config: dict = None) -> None:
 		# Apply character-specific HTML settings from the hardware JSON.
 		# css_file in the JSON is a project-relative path (e.g. "webpage/assets/css/kermit.css"),
