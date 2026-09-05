@@ -718,44 +718,80 @@ function reverseFlipAnimation() {
 	}
 }
 
-// Submit TTS Handling
+// -------------------------------------------------------------------------
+// Text submission (Repeat / Command)
+// -------------------------------------------------------------------------
+
+// Repeat: the animatronic speaks the text back verbatim.
+// Command: the text is handed to the voice command / LLM path, exactly as a
+// spoken utterance would be.
+let bCommandMode = false;
+
 function setupSubmitTTS() {
 	const submitButton = document.getElementById('submitTTSButton');
 	const ttsInput = document.getElementById('ttsInput');
+	const repeatRadio = document.getElementById('textModeRepeat');
+	const commandRadio = document.getElementById('textModeCommand');
 
 	if (submitButton) {
-		submitButton.addEventListener('click', submitTTS);
+		submitButton.addEventListener('click', submitText);
 	} else {
-		console.warn('Submit TTS Button not found!');
+		console.warn('Submit Text Button not found!');
 	}
 
 	if (ttsInput) {
 		ttsInput.addEventListener('keydown', function (event) {
 			if (event.key === 'Enter') {
 				event.preventDefault();
-				submitTTS();
+				submitText();
 			}
 		});
 	} else {
 		console.warn('TTS Input field not found!');
 	}
+
+	if (repeatRadio && commandRadio) {
+		if (localStorage.getItem('commandModeEnabled') === 'true') {
+			commandRadio.checked = true;
+		} else {
+			repeatRadio.checked = true;
+		}
+		repeatRadio.addEventListener('change', () => setCommandMode(false));
+		commandRadio.addEventListener('change', () => setCommandMode(true));
+		setCommandMode(commandRadio.checked);
+	} else {
+		console.warn('Text mode toggle not found!');
+		setCommandMode(false);
+	}
 }
 
-function submitTTS() {
+function setCommandMode(enabled) {
+	bCommandMode = !!enabled;
+	localStorage.setItem('commandModeEnabled', bCommandMode);
+
+	const inputField = document.getElementById('ttsInput');
+	if (inputField) {
+		inputField.placeholder = bCommandMode
+			? 'Type something to ask…'
+			: 'Type something to say…';
+	}
+}
+
+function submitText() {
 	const inputField = document.getElementById('ttsInput');
 	const submitButton = document.getElementById('submitTTSButton');
 	const inputText = inputField ? inputField.value.trim() : '';
 
 	if (inputText) {
-		console.log(`Submitted TTS Text: ${inputText}`);
+		console.log(`Submitted ${bCommandMode ? 'command' : 'text'}: ${inputText}`);
 		if (submitButton) {
 			submitButton.disabled = true;
 			submitButton.classList.add('disabled');
 		}
 
-		socket.emit('onWebTTSSubmit', inputText);
+		socket.emit('onWebTextSubmit', { text: inputText, isCommand: bCommandMode });
 	} else {
-		console.warn('No text entered for TTS submission.');
+		console.warn('No text entered for submission.');
 	}
 
 	if (inputField) {

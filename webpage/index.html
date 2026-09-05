@@ -47,6 +47,12 @@
                         <input type="text" id="ttsInput" placeholder="Type something to say…" />
                         <button id="submitTTSButton" type="button">Speak</button>
                     </div>
+                    <div id="textModeToggle" role="radiogroup" aria-label="Text submit mode">
+                        <input type="radio" id="textModeRepeat" name="textMode" value="repeat" checked />
+                        <label for="textModeRepeat">Repeat Text</label>
+                        <input type="radio" id="textModeCommand" name="textMode" value="command" />
+                        <label for="textModeCommand">Command/Query</label>
+                    </div>
                 </div>
 
                 <!-- Show Controls -->

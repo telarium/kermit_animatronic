@@ -206,6 +206,54 @@ hr {
 }
 
 /* =========================================================
+   Repeat / Command mode toggle
+   ========================================================= */
+#textModeToggle {
+    display: inline-flex;
+    margin-top: 0.7em;
+    border: 2px solid #7fff3a;
+    border-radius: 2em;
+    overflow: hidden;
+}
+
+/* Hidden but still focusable, so the pills below act as the visible control. */
+#textModeToggle input[type="radio"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#textModeToggle label {
+    margin: 0;
+    padding: 0 1.2em;
+    height: 1.85em;
+    line-height: 1.85em;
+    font-size: 0.72em;
+    color: #7fff3a;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+#textModeToggle label:hover {
+    background-color: rgba(127, 255, 58, 0.15);
+}
+
+#textModeToggle input[type="radio"]:checked + label {
+    background-color: #7fff3a;
+    color: #0d2b06;
+    font-weight: bold;
+}
+
+#textModeToggle input[type="radio"]:focus-visible + label {
+    outline: 2px solid #ffffff;
+    outline-offset: -2px;
+}
+
+/* =========================================================
    Show controls
    ========================================================= */
 #showControls {
@@ -780,6 +828,16 @@ button:disabled,
 
     #submitTTSButton {
         width: 100%;
+    }
+
+    #textModeToggle {
+        display: flex;
+        width: 100%;
+    }
+
+    #textModeToggle label {
+        flex: 1 1 0;
+        text-align: center;
     }
 
     /* Play / Pause / Stop fill the row */

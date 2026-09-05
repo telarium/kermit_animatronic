@@ -74,9 +74,22 @@ class WebServer:
 	def connect_to_wifi(data: dict) -> None:
 		dispatcher.send(signal="connectToWifi", ssid=data["ssid"], password=data["password"])
 
-	@socketio.on('onWebTTSSubmit')
-	def web_tts_submit(inputText: str) -> None:
-		dispatcher.send(signal="executeTTS", text=inputText)
+	@socketio.on('onWebTextSubmit')
+	def web_text_submit(data: Any) -> None:
+		"""Typed text from the web UI. As a command it takes the same path a
+		spoken utterance would; otherwise it is spoken back verbatim."""
+		if isinstance(data, dict):
+			text = str(data.get("text", "")).strip()
+			is_command = bool(data.get("isCommand", False))
+		else:
+			text, is_command = str(data).strip(), False
+
+		if not text:
+			return
+		if is_command:
+			dispatcher.send(signal="transcriptionResult", text=text)
+		else:
+			dispatcher.send(signal="executeTTS", text=text)
 
 	@socketio.on('onConfigSave')
 	def config_save_event(updates: dict) -> None:
