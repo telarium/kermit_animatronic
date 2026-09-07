@@ -33,6 +33,10 @@ class Setup:
 			"flask-socketio==5.3.6",
 			"python-socketio==5.10.0",
 			"python-engineio==4.8.0",
+			# Required for WebSocket in async_mode='threading'. Without it
+			# Flask-SocketIO can only serve polling, which adds an HTTP
+			# round trip to every key event.
+			"simple-websocket",
 			# numpy pinned to <2.0 for openwakeword compatibility
 			"numpy<2.0",
 			# Other pip-only packages

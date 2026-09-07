@@ -5,11 +5,17 @@ const socketUrl = `${protocol}${document.domain}:${location.port}`;
 
 bInvertHeadNod = false;
 
-// Connect to the server using polling transport instead of WebSocket
-const socket = io.connect(socketUrl, { transports: ['polling'] });
+// Default transports: connect on polling, then upgrade to WebSocket. Do not
+// pin this to ['websocket'] — the bundled client is 4.7.5, which has no
+// fallback if the upgrade fails.
+const socket = io.connect(socketUrl);
 
 socket.on('connect', () => {
 	socket.emit('onConnect', { data: "I'm connected!" });
+	console.log(`Socket connected via ${socket.io.engine.transport.name}`);
+	socket.io.engine.on('upgrade', (transport) => {
+		console.log(`Socket upgraded to ${transport.name}`);
+	});
 });
 
 /**
