@@ -10,6 +10,7 @@ from midi import MIDI
 from gpio import GPIO
 from program_blue import ProgramBlue
 from gamepad_input import USBGamepadReader, Button
+from keyboard_input import USBKeyboardReader
 
 
 @dataclass
@@ -43,6 +44,9 @@ class Movement:
 		self.midi = MIDI()
 		self.program_blue = ProgramBlue()
 		self.gamepad = USBGamepadReader()
+		# Dispatches keyEvent directly, so no handler is needed here — it
+		# arrives through on_key_event like a web keypad press.
+		self.keyboard = USBKeyboardReader()
 		self.b_thread_started: bool = False
 
 		self._load_movements(config_path)
