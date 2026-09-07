@@ -36,9 +36,11 @@ class MovementStruct:
 
 
 class Movement:
-	all: List[MovementStruct] = []
-
 	def __init__(self, config_path: str) -> None:
+		# Instance attribute, not class-level — a shared mutable default would
+		# accumulate duplicates across instances.
+		self.all: List[MovementStruct] = []
+
 		self.b_mirrored: bool = False
 		self.gpio = GPIO()
 		self.midi = MIDI()
@@ -88,6 +90,8 @@ class Movement:
 				movement.output_pin2_max_time = p.get('max_sec', -1)
 
 			self.all.append(movement)
+
+		print(f"Movement: loaded {len(self.all)} movements from {config_path}")
 
 	def set_mirrored(self, val: bool) -> None:
 		if self.b_mirrored == val:
@@ -144,15 +148,16 @@ class Movement:
 				dispatcher.send(signal="onMovementKeyActivated", key=movement.key, on=False)
 
 	def set_pin(self, pin: List[Any], val: int, movement: MovementStruct) -> None:
-		self.gpio.set_pin_from_address(pin[0], pin[1], val)
+		if not pin:
+			return
+		if not self.gpio.set_pin_from_address(pin[0], pin[1], val):
+			print(f"Movement: '{movement.key}' {movement.description} "
+			      f"GPIO write dropped (0x{pin[0]:02X} pin {pin[1]} = {val})")
 
 	def execute_movement(self, key: str, val: int, b_mute_output: bool = False) -> bool:
 		b_do_callback = False
 		for movement in self.all:
 			if movement.key == key and key:
-				#print(movement.description)
-				#print(val)
-				#print(key)
 				if val == 1 and not movement.key_is_pressed:
 					movement.key_is_pressed = True
 					b_do_callback = True
@@ -173,7 +178,8 @@ class Movement:
 					if movement.output_pin2:
 						self.set_pin(movement.output_pin2, 1 - val, movement)
 						movement.pin2_time = 0 if val == 1 else movement.output_pin2_max_time
-					break
+				break
+
 		if not self.b_thread_started:
 			self.b_thread_started = True
 			t = threading.Thread(target=self.update_pins, daemon=True)
