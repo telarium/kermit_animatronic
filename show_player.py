@@ -144,9 +144,10 @@ class ShowPlayer:
 			shw_path = os.path.join(directory, show_name + '.shw')
 			if os.path.isfile(shw_path):
 				audio_path, events = parse_shw_file(shw_path)
-				print(f"ShowPlayer: event table ({len(events)} events):")
-				for e in events:
-					print(f"  {e[0]:6}ms  ch={e[1]:3d}  val={e[2]}")
+				channels = sorted(set(e[1] for e in events))
+				duration = max((e[0] for e in events), default=0)
+				print(f"ShowPlayer: {len(events)} events on channels {channels}, "
+				      f"last at {duration}ms")
 				return audio_path, events, ShowType.PROGRAM_BLUE
 
 			# Try audio + MIDI pair.
