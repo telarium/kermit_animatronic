@@ -8,33 +8,26 @@ RS-232 via a USB-to-serial adapter (PL2303 or similar).
 Hardware path:
 	PC (ProgramBlue) → USB-RS232 → DB9 null-modem → DB9 → USB-serial → Jetson Orin Nano
 
-Protocol (reverse-engineered from USBPcap capture):
+Protocol:
 	- Frame length : 38 bytes
 	- Byte  [0]    : 0xAB (start marker)
 	- Bytes [1-2]  : channel bitmask (16 channels, MSB first)
-	                   byte[1] bit7 = channel 0
-	                   byte[1] bit6 = channel 1
-	                   ...
-	                   byte[1] bit0 = channel 7
-	                   byte[2] bit7 = channel 8
-	                   byte[2] bit6 = channel 9
-	                   ...
+	                   byte[1] bit7 = channel 0, byte[2] bit0 = channel 15
 	- Byte  [26]   : 0x40 (fixed flags byte)
-	- Bytes [3-25] : currently observed as zero (reserved / unknown)
-	- Bytes [27-37]: currently observed as zero (reserved / unknown)
+	- Bytes [3-25], [27-37]: observed as zero (reserved / unknown)
 
-Handshake (reverse-engineered from USBPcap capture):
-	ProgramBlue sends single-byte commands before and during playback.
-	The board must respond or ProgramBlue will not proceed.
+	ProgramBlue's UI numbers channels from 1; the wire is 0-based. The
+	character config uses wire numbering, so Mouth = 0.
 
-	CMD 'Y' (0x59) — identification query
-	  → respond: "SP2" (0x53 0x50 0x32)
+Handshake:
+	CMD 'Y' (0x59) — identification query    → "SP2"
+	CMD 'W' (0x57) — status/version query    → 0x00 0x00 0x6C 0x4D
+	CMD 'M' (0x4D) — start status stream     → 0x18 0x00 0x00, then keep
+	                                           streaming at STREAM_HZ
 
-	CMD 'W' (0x57) — status/version query
-	  → respond: 0x00 0x00 0x6C 0x4D
-
-	CMD 'M' (0x4D) — start/continue status stream
-	  → respond: 0x18 0x00 0x00, then keep streaming at STREAM_HZ
+	The stream is required — without it ProgramBlue's playback crawls.
+	send() must not flush(): tcdrain blocks on USB-serial, and doing it
+	under a lock the reader needs starves the reader thread.
 
 	Command bytes are only intercepted when no partial frame is being
 	assembled, preventing false-positives inside 0xAB frames.
@@ -44,11 +37,12 @@ Dispatched signals:
 	                       kwargs: channel (int, 0-15), val (int, 0 or 1)
 """
 
+import re
 import threading
 import time
-import serial
-import re
 from typing import Optional
+
+import serial
 from pydispatch import dispatcher
 
 
@@ -56,7 +50,7 @@ from pydispatch import dispatcher
 
 SERIAL_PORT    = "/dev/ttyUSB0"	# PL2303 USB-serial adapter on Jetson
 BAUD_RATE      = 115200
-POLL_TIMEOUT   = 0.1			# Serial read timeout in seconds
+POLL_TIMEOUT   = 0.05			# Serial read timeout in seconds
 
 
 # ─── ProgramBlue Protocol ─────────────────────────────────────────────────────
@@ -73,11 +67,24 @@ CMD_IDENTIFY = 0x59		# 'Y' — identification query
 CMD_STATUS   = 0x57		# 'W' — status/version query
 CMD_STREAM   = 0x4D		# 'M' — start/continue status stream
 
+CMD_NAMES = {
+	CMD_IDENTIFY: "Y identify",
+	CMD_STATUS:   "W status",
+	CMD_STREAM:   "M stream",
+}
+
 IDENTIFY_RESP = bytes([0x53, 0x50, 0x32])		# "SP2"
 STATUS_RESP   = bytes([0x00, 0x00, 0x6C, 0x4D])
 STREAM_RESP   = bytes([0x18, 0x00, 0x00])
 
-STREAM_HZ     = 50		# Status stream rate in Hz while streaming mode is active
+STREAM_HZ     = 40		# Status stream rate; ProgramBlue paces its frame
+						# output off this, so it must match SHW_FPS in the converter.
+
+# ProgramBlue appears to be one-way for channel data. Sending frames upstream
+# puts raw bytes in the buffer it reads handshake replies from.
+RECONNECT_INTERVAL = 3.0	# Seconds between reopen attempts after a disconnect
+
+ENABLE_TX_FRAMES = False
 
 
 class ProgramBlue:
@@ -87,34 +94,19 @@ class ProgramBlue:
 		self._rx_buf: bytearray = bytearray()
 		self._stop_event = threading.Event()
 		self._tx_lock = threading.Lock()
-		self._handshake_lock = threading.Lock()
 		self._tx_bitmask: int = 0
 		self._available: bool = False
 		self._streaming: bool = False
+		self._reported_missing: bool = False
+
+		self._frame_count: int = 0
+		self._discard_count: int = 0
+		self._cmd_counts: dict[int, int] = {c: 0 for c in CMD_NAMES}
 
 		# Track last known channel states to only dispatch on changes
 		self._channel_states: list[int] = [0] * NUM_CHANNELS
 
-		try:
-			self._ser = serial.Serial(
-				port=port,
-				baudrate=BAUD_RATE,
-				bytesize=serial.EIGHTBITS,
-				parity=serial.PARITY_NONE,
-				stopbits=serial.STOPBITS_ONE,
-				timeout=POLL_TIMEOUT,
-				# Do not enable hardware flow control — the null-modem adapter
-				# crosses RTS/CTS, and ProgramBlue doesn't require flow control.
-				rtscts=False,
-				dsrdtr=False,
-			)
-			# Drive RTS low so the null-modem's CTS line is satisfied,
-			# mirroring what the SC16IS752 MCR setup did on the old board.
-			self._ser.rts = True
-			self._available = True
-			print(f"ProgramBlue: opened {port} at {BAUD_RATE} baud, 8N1.")
-		except serial.SerialException as e:
-			print(f"ProgramBlue: could not open {port} — {e}. Running in offline mode.")
+		self._open_port()
 
 		self._reader_thread = threading.Thread(
 			target=self._reader_loop, name="programblue-reader", daemon=True
@@ -124,22 +116,75 @@ class ProgramBlue:
 		)
 		self._reader_thread.start()
 		self._stream_thread.start()
-		print("ProgramBlue: reader and stream threads started.")
+		print(f"ProgramBlue: reader and stream threads started ({STREAM_HZ} Hz).")
+
+	# ─── Connection handling ─────────────────────────────────────────────────
+
+	def _open_port(self) -> bool:
+		"""Try to open the serial port. Quiet on repeated failures."""
+		try:
+			self._ser = serial.Serial(
+				port=self._port,
+				baudrate=BAUD_RATE,
+				bytesize=serial.EIGHTBITS,
+				parity=serial.PARITY_NONE,
+				stopbits=serial.STOPBITS_ONE,
+				timeout=POLL_TIMEOUT,
+				rtscts=False,
+				dsrdtr=False,
+			)
+			self._ser.rts = True
+			self._ser.dtr = True
+			self._available = True
+			self._reported_missing = False
+			print(f"ProgramBlue: opened {self._port} at {BAUD_RATE} baud, 8N1.")
+			return True
+		except (OSError, serial.SerialException) as e:
+			self._ser = None
+			self._available = False
+			if not self._reported_missing:
+				self._reported_missing = True
+				print(f"ProgramBlue: could not open {self._port} — {e}. "
+				      f"Retrying every {RECONNECT_INTERVAL:.0f}s.")
+			return False
+
+	def _handle_disconnect(self, why: str) -> None:
+		"""Release every channel and drop the port so the reader can reopen it."""
+		if self._available:
+			print(f"ProgramBlue: disconnected — {why}")
+		self._available = False
+		self._streaming = False
+		self._rx_buf.clear()
+		# Release before anything else: a latched solenoid must not stay
+		# energised because the cable came out.
+		self._reset_channels()
+		if self._ser is not None:
+			try:
+				self._ser.close()
+			except Exception:
+				pass
+			self._ser = None
 
 	# ─── Public API ──────────────────────────────────────────────────────────
 
 	def send(self, data: bytes) -> None:
-		"""Write bytes to ProgramBlue over the USB-serial TX line."""
+		"""Write bytes to ProgramBlue. No flush() — see module docstring."""
 		if not self._available or self._ser is None:
 			return
-		with self._tx_lock:
-			self._ser.write(data)
-			self._ser.flush()
+		try:
+			with self._tx_lock:
+				self._ser.write(data)
+		except (OSError, serial.SerialException) as e:
+			self._handle_disconnect(f"write failed: {e}")
 
 	def send_channel(self, channel: int, val: int) -> None:
 		"""Update a single channel in the outgoing bitmask and send a frame."""
-		if not self._available:
+		if not ENABLE_TX_FRAMES or not self._available:
 			return
+		# The config default is -1, and 0x8000 >> -1 raises ValueError.
+		if not 0 <= channel < NUM_CHANNELS:
+			return
+
 		if val:
 			self._tx_bitmask |= (0x8000 >> channel)
 		else:
@@ -152,76 +197,93 @@ class ProgramBlue:
 		frame[26] = FRAME_FLAGS
 		self.send(bytes(frame))
 
+	def stats(self) -> dict:
+		return {
+			"available":  self._available,
+			"streaming":  self._streaming,
+			"frames":     self._frame_count,
+			"discarded":  self._discard_count,
+			"commands":   {CMD_NAMES[c]: n for c, n in self._cmd_counts.items()},
+			"channels":   list(self._channel_states),
+			"partial_rx": len(self._rx_buf),
+		}
+
 	def stop(self) -> None:
 		self._stop_event.set()
 		self._reader_thread.join(timeout=2)
 		self._stream_thread.join(timeout=2)
-		if self._ser and self._ser.is_open:
-			self._ser.close()
-		print("ProgramBlue: stopped.")
+		self._handle_disconnect("shutting down")
+		print(f"ProgramBlue: stopped. frames={self._frame_count} "
+		      f"discarded={self._discard_count}")
 
 	# ─── Reader Loop ─────────────────────────────────────────────────────────
 
 	def _reader_loop(self) -> None:
 		print("ProgramBlue: listening for data...")
+		next_retry = 0.0
 		while not self._stop_event.is_set():
 			if not self._available or self._ser is None:
+				now = time.monotonic()
+				if now >= next_retry:
+					next_retry = now + RECONNECT_INTERVAL
+					self._open_port()
 				time.sleep(0.1)
 				continue
 			try:
-				# Blocking read with POLL_TIMEOUT; returns b"" on timeout
-				raw = self._ser.read(1)
-				if raw:
-					self._handle_byte(raw[0])
-			except serial.SerialException as e:
-				print(f"ProgramBlue: serial error — {e}. Retrying...")
-				time.sleep(0.1)
+				waiting = self._ser.in_waiting
+				raw = self._ser.read(waiting if waiting else 1)
+				for b in raw:
+					self._handle_byte(b)
+			except (OSError, serial.SerialException, TypeError) as e:
+				# TypeError covers _ser being cleared by another thread mid-read.
+				self._handle_disconnect(f"read failed: {e}")
+				next_retry = time.monotonic() + RECONNECT_INTERVAL
 
 	def _handle_byte(self, byte: int) -> None:
-		"""Route incoming byte: handle command bytes or accumulate for frame parsing.
-
-		Command bytes are only intercepted when no partial frame is being
-		assembled, preventing 0x4D / 0x57 / 0x59 inside a frame from being
-		mistakenly treated as commands.
-		"""
-		if not self._rx_buf and byte in (CMD_IDENTIFY, CMD_STATUS, CMD_STREAM):
+		if not self._rx_buf and byte in CMD_NAMES:
 			self._handle_command(byte)
 			return
 		self._rx_buf.append(byte)
 		self._try_parse_frame()
 
 	def _handle_command(self, cmd: int) -> None:
-		"""Respond to ProgramBlue handshake commands."""
+		# No reset_input_buffer() here: ProgramBlue sends its command and the
+		# bytes that follow in one burst, and flushing discards them.
+		self._cmd_counts[cmd] += 1
+		print(f"ProgramBlue: {CMD_NAMES[cmd]} (#{self._cmd_counts[cmd]}) — replying.")
+
 		if cmd == CMD_IDENTIFY:
-			print("ProgramBlue: received 'Y' — sending SP2 identification.")
-			with self._handshake_lock:
-				self._streaming = False
-				self._rx_buf.clear()
-				if self._ser:
-					self._ser.reset_input_buffer()
-					self._ser.reset_output_buffer()
-				self.send(IDENTIFY_RESP)
+			self._streaming = False
+			self._rx_buf.clear()
+			self._reset_channels()
+			self.send(IDENTIFY_RESP)
 		elif cmd == CMD_STATUS:
-			with self._handshake_lock:
-				self.send(STATUS_RESP)
+			self.send(STATUS_RESP)
 		elif cmd == CMD_STREAM:
-			with self._handshake_lock:
-				self._streaming = True
-				self.send(STREAM_RESP)
+			self._streaming = True
+			self.send(STREAM_RESP)
+
+	def _reset_channels(self) -> None:
+		"""Drop every channel so nothing stays latched."""
+		for ch, state in enumerate(self._channel_states):
+			if state:
+				self._channel_states[ch] = 0
+				dispatcher.send(signal="onProgramBlueEvent", channel=ch, val=0)
 
 	def _try_parse_frame(self) -> None:
 		"""Discard bytes before start marker, then parse complete frames."""
 		while self._rx_buf and self._rx_buf[0] != FRAME_START:
-			discarded = self._rx_buf.pop(0)
-			print(f"ProgramBlue: discarding out-of-frame byte 0x{discarded:02X}")
+			self._rx_buf.pop(0)
+			self._discard_count += 1
 
-		if len(self._rx_buf) >= FRAME_LENGTH:
-			frame = bytearray(self._rx_buf[:FRAME_LENGTH])
+		while len(self._rx_buf) >= FRAME_LENGTH:
+			frame = bytes(self._rx_buf[:FRAME_LENGTH])
 			self._rx_buf = self._rx_buf[FRAME_LENGTH:]
 			self._dispatch_frame(frame)
 
-	def _dispatch_frame(self, frame: bytearray) -> None:
+	def _dispatch_frame(self, frame: bytes) -> None:
 		"""Parse channel bitmask and dispatch signals for any state changes."""
+		self._frame_count += 1
 		bitmask = (frame[1] << 8) | frame[2]
 
 		for ch in range(NUM_CHANNELS):
@@ -233,17 +295,15 @@ class ProgramBlue:
 	# ─── Status Stream Loop ───────────────────────────────────────────────────
 
 	def _stream_loop(self) -> None:
-		"""Continuously send STREAM_RESP at STREAM_HZ while streaming mode is active.
+		"""Push STREAM_RESP at STREAM_HZ while streaming mode is active.
 
-		ProgramBlue sends 'M' to start the status stream and expects the
-		board to keep broadcasting 0x18 0x00 0x00. This mirrors the BlueSpider's
-		behaviour observed in the USBPcap capture.
+		Takes no lock the reader needs — that contention is what previously
+		stalled frame reception.
 		"""
 		interval = 1.0 / STREAM_HZ
 		while not self._stop_event.is_set():
-			with self._handshake_lock:
-				if self._streaming and self._available:
-					self.send(STREAM_RESP)
+			if self._streaming and self._available:
+				self.send(STREAM_RESP)
 			time.sleep(interval)
 
 
@@ -253,7 +313,8 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 	"""Parse a ProgramBlue .shw file and return (audio_path, channel_events).
 
 	Supports both v2 (DSFRobots) and v5 (dsfa) file formats.
-	Returns a list of events in the form [timestamp_ms, channel, value].
+	Returns events as [timestamp_ms, channel, value], in wire numbering
+	(0-based) to match _dispatch_frame and the character config.
 	"""
 	AUDIO_TMP = "/tmp/shw_audio.mp3"
 
@@ -274,13 +335,17 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 	def parse_v5_frame_table(decoded: bytes, fps: int) -> list[list]:
 		FRAME_BASE   = 20
 		FRAME_STRIDE = 258
-		NUM_CHANNELS = 256
+		NUM_SHW_CHANNELS = 256
 
 		table_end = decoded.find(b"<", 512)
 		if table_end == -1:
 			raise ValueError("Could not find v5 frame table terminator")
 
 		frame_count = (table_end - FRAME_BASE) // FRAME_STRIDE
+		# A clean table ends exactly on a row boundary. If it doesn't, the
+		# last counted row runs into the trailer and isn't channel data.
+		if (table_end - FRAME_BASE) % FRAME_STRIDE:
+			frame_count -= 1
 		if frame_count <= 0:
 			raise ValueError("Could not detect v5 frame table")
 
@@ -301,6 +366,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 				frame_count -= 1
 
 		def pos_to_channel(pos: int) -> int | None:
+			"""Row position -> 1-based .shw channel."""
 			if pos == 257:
 				return 1
 			if 0 <= pos <= 254:
@@ -308,7 +374,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 			return None
 
 		events: list[list] = []
-		prev = [0] * NUM_CHANNELS
+		prev = [0] * NUM_SHW_CHANNELS
 
 		for frame in range(frame_count):
 			row_start = FRAME_BASE + frame * FRAME_STRIDE
@@ -317,7 +383,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 			if len(row) < FRAME_STRIDE:
 				break
 
-			current = [0] * NUM_CHANNELS
+			current = [0] * NUM_SHW_CHANNELS
 
 			for pos, b in enumerate(row):
 				channel = pos_to_channel(pos)
@@ -326,9 +392,10 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 
 			for channel_index, value in enumerate(current):
 				if value != prev[channel_index]:
+					# channel_index is 0-based = wire numbering
 					events.append([
 						frame_to_ms(frame, fps),
-						channel_index + 1,
+						channel_index,
 						value,
 					])
 
@@ -336,7 +403,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 
 		print(
 			f"ProgramBlue: v5 layout frames={frame_count}, "
-			f"stride={FRAME_STRIDE}, base={FRAME_BASE}, channels={NUM_CHANNELS}"
+			f"stride={FRAME_STRIDE}, base={FRAME_BASE}, channels={NUM_SHW_CHANNELS}"
 		)
 
 		return events
@@ -347,18 +414,18 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 		body_start: int,
 		body_end: int,
 	) -> list[list]:
-		NUM_CHANNELS = 256
+		NUM_SHW_CHANNELS = 256
 		frame_lines = decoded[body_start:body_end].splitlines()
 
 		events: list[list] = []
-		prev = [0] * NUM_CHANNELS
+		prev = [0] * NUM_SHW_CHANNELS
 
 		for frame, line in enumerate(frame_lines):
 			if len(line) != 256:
 				continue
 
 			row = bytes.fromhex(line.decode("ascii"))
-			current = [0] * NUM_CHANNELS
+			current = [0] * NUM_SHW_CHANNELS
 
 			for byte_index, value in enumerate(row):
 				current[byte_index * 2] = 1 if value & 0x10 else 0
@@ -368,7 +435,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 				if value != prev[channel_index]:
 					events.append([
 						frame_to_ms(frame, fps),
-						channel_index + 1,
+						channel_index,
 						value,
 					])
 
@@ -376,7 +443,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 
 		print(
 			f"ProgramBlue: v2 layout frames={len(frame_lines)}, "
-			f"channels={NUM_CHANNELS}"
+			f"channels={NUM_SHW_CHANNELS}"
 		)
 
 		return events
@@ -443,7 +510,11 @@ if __name__ == "__main__":
 
 	try:
 		while True:
-			time.sleep(1)
+			time.sleep(5)
+			s = pb.stats()
+			print(f"  [stats] frames={s['frames']} streaming={s['streaming']} "
+			      f"discarded={s['discarded']} partial={s['partial_rx']} "
+			      f"cmds={s['commands']}")
 	except KeyboardInterrupt:
 		pb.stop()
 		print("Exiting.")
