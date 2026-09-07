@@ -64,17 +64,22 @@ def load_config(config_path: str) -> dict:
 def build_channel_map(config: dict) -> tuple[dict, dict]:
 	"""
 	Returns two dicts built from the movements in the JSON config:
-		midi_note_to_pb_channel : { midi_note -> program_blue_channel }
-		pb_channel_to_midi_note : { program_blue_channel -> midi_note }
+		midi_note_to_pb_channel : { midi_note -> shw_channel }
+		pb_channel_to_midi_note : { shw_channel -> midi_note }
+
+	The config stores program_blue_channel in wire numbering (0-based, as
+	program_blue.py dispatches it); the rest of this file uses .shw
+	numbering (1-based). This is the only place that converts.
 	"""
 	midi_to_pb = {}
 	pb_to_midi = {}
 	for m in config.get('movements', []):
 		note    = m.get('midi_note')
 		channel = m.get('program_blue_channel')
-		if note is not None and channel is not None:
-			midi_to_pb[note]    = channel
-			pb_to_midi[channel] = note
+		if note is not None and channel is not None and channel >= 0:
+			shw_channel             = channel + 1
+			midi_to_pb[note]        = shw_channel
+			pb_to_midi[shw_channel] = note
 	return midi_to_pb, pb_to_midi
 
 
