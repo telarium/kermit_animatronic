@@ -296,12 +296,11 @@ def sync_config_copies(active_path: str, base_dir: str, usb_mount_point: str, us
 	return errors
 
 
-def build_config_data(path: str, excluded_sections: tuple = ()) -> dict:
-	"""Parse an INI config file into {section: {key: value}}.
+def _parse_config_sections(path: str, excluded_sections: tuple = ()) -> dict:
+	"""Parse an INI file into {section: {key: value}}, or {} if unreadable.
 
 	Key casing is preserved as written in the file. Sections whose
-	lowercased name appears in excluded_sections are omitted.
-	Returns {} if the file cannot be parsed."""
+	lowercased name appears in excluded_sections are omitted."""
 	cfg = configparser.ConfigParser()
 	cfg.optionxform = str  # preserve key case for display
 	try:
@@ -317,6 +316,35 @@ def build_config_data(path: str, excluded_sections: tuple = ()) -> dict:
 		data[section] = {}
 		for key, value in cfg.items(section):
 			data[section][key] = value
+	return data
+
+
+def build_config_data(path: str, excluded_sections: tuple = (),
+                      template_path: str = "") -> dict:
+	"""Parse an INI config file into {section: {key: value}} for the web editor.
+
+	Any section or key template_path defines but the config lacks is added
+	with the template's value, so a setting added later still shows up for
+	configs written before it existed (a USB drive's, in particular, which
+	nothing rewrites on its own). Values already in the config win. Matching
+	is case-insensitive, as ConfigParser reads keys case-insensitively."""
+	data = _parse_config_sections(path, excluded_sections)
+	if not template_path or not os.path.exists(template_path):
+		return data
+
+	defaults = _parse_config_sections(template_path, excluded_sections)
+	sections_lower = {name.strip().lower(): name for name in data}
+
+	for section, values in defaults.items():
+		existing_name = sections_lower.get(section.strip().lower())
+		if existing_name is None:
+			data[section] = dict(values)
+			continue
+		target = data[existing_name]
+		keys_lower = {key.strip().lower() for key in target}
+		for key, value in values.items():
+			if key.strip().lower() not in keys_lower:
+				target[key] = value
 	return data
 
 

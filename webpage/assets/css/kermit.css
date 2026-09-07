@@ -475,6 +475,27 @@ hr {
     line-height: 1.4;
 }
 
+/* Boolean settings: box first, label beside it. */
+.config-field-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    margin-bottom: 0.75em;
+}
+
+.config-field-check input[type="checkbox"] {
+    width: 1.1em;
+    height: 1.1em;
+    margin: 0;
+    flex: none;
+    cursor: pointer;
+}
+
+.config-field-check label {
+    margin: 0;
+    cursor: pointer;
+}
+
 #configSaveStatus {
     color: #fff;
     min-height: 1.3em;

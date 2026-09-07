@@ -94,6 +94,19 @@ const PINNED_CONTEXT_FIELDS = [
 	{ key: AI_CONTEXT_KEY, title: 'AI Context (Long)' },
 ];
 
+// Config keys shown as a checkbox rather than a text box, matched lowercased.
+// They save as "1"/"0"; TRUTHY_CONFIG_VALUES is what configparser reads as true.
+const BOOLEAN_CONFIG_KEYS = new Set(['leddisable']);
+const TRUTHY_CONFIG_VALUES = new Set(['1', 'true', 'yes', 'on']);
+
+function isBooleanConfigKey(key) {
+	return BOOLEAN_CONFIG_KEYS.has(String(key).toLowerCase());
+}
+
+function isTruthyConfigValue(value) {
+	return TRUTHY_CONFIG_VALUES.has(String(value ?? '').trim().toLowerCase());
+}
+
 socket.on('configLoaded', (data) => {
 	animatronicConfig = data || {};
 	console.log('Config loaded:', animatronicConfig);
@@ -207,7 +220,9 @@ function buildConfigEditor() {
 
 		appendConfigSectionTitle(container, section);
 		keys.forEach(key => {
-			appendConfigField(container, section, key, animatronicConfig[section][key], {});
+			appendConfigField(container, section, key, animatronicConfig[section][key], {
+				checkbox: isBooleanConfigKey(key),
+			});
 		});
 	});
 }
@@ -219,16 +234,38 @@ function appendConfigSectionTitle(container, title) {
 	container.appendChild(el);
 }
 
-function appendConfigField(container, section, key, value, { textarea = false, label = key } = {}) {
+function appendConfigField(container, section, key, value, { textarea = false, checkbox = false, label = key } = {}) {
 	const field = document.createElement('div');
 	field.classList.add('config-field');
 
 	const inputId = `config-${section}-${key}`;
-	if (label) {
+
+	function buildLabel() {
 		const labelEl = document.createElement('label');
 		labelEl.setAttribute('for', inputId);
 		labelEl.textContent = label;
-		field.appendChild(labelEl);
+		return labelEl;
+	}
+
+	if (checkbox) {
+		// Box first, then label — not the label-above layout the text inputs use.
+		field.classList.add('config-field-check');
+		const input = document.createElement('input');
+		input.type = 'checkbox';
+		input.id = inputId;
+		input.checked = isTruthyConfigValue(value);
+		input.dataset.configSection = section;
+		input.dataset.configKey = key;
+		field.appendChild(input);
+		if (label) {
+			field.appendChild(buildLabel());
+		}
+		container.appendChild(field);
+		return;
+	}
+
+	if (label) {
+		field.appendChild(buildLabel());
 	}
 
 	const input = document.createElement(textarea ? 'textarea' : 'input');
@@ -256,14 +293,22 @@ function submitConfigSave() {
 		const section = el.dataset.configSection;
 		const key = el.dataset.configKey;
 		const original = (animatronicConfig[section] || {})[key] ?? '';
-		// Config values are single INI lines: fold any newlines into spaces.
-		const value = el.value.replace(/[\r\n]+/g, ' ').trim();
+		let value;
 
-		if (value !== original) {
-			if (!updates[section]) updates[section] = {};
-			updates[section][key] = value;
-			changedCount++;
+		if (el.type === 'checkbox') {
+			// Compared as booleans: "1", "true" and "yes" all mean the same, so
+			// an untouched box must not count as an edit by normalising to "1".
+			if (el.checked === isTruthyConfigValue(original)) return;
+			value = el.checked ? '1' : '0';
+		} else {
+			// Config values are single INI lines: fold any newlines into spaces.
+			value = el.value.replace(/[\r\n]+/g, ' ').trim();
+			if (value === original) return;
 		}
+
+		if (!updates[section]) updates[section] = {};
+		updates[section][key] = value;
+		changedCount++;
 	});
 
 	if (changedCount === 0) {

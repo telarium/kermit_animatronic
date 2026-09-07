@@ -16,7 +16,7 @@ single-colour mode, so the breath is produced by rewriting LED_COLOR every
 frame from a worker thread. Firmware gamma correction is switched off for this,
 since the curve is applied in software.
 
-Configuration comes from the character JSON, e.g.
+Appearance comes from the character JSON, e.g.
 
 	"led": {
 		"color":         "0x00FF00",
@@ -26,12 +26,18 @@ Configuration comes from the character JSON, e.g.
 		"fps":            20
 	}
 
+Whether the ring lights at all comes from config.cfg's [LED] LEDDisable, since
+that is an install preference rather than part of the character. States are
+still tracked while disabled, so clearing the flag lights the ring again
+without a restart.
+
 All device access happens on the worker thread, through the shared
 respeaker.ReSpeaker handle rather than a private one — the DSP settings and the
 LED ring are the same control endpoint. State changes are queued and coalesced,
 so a caller on the audio path never blocks on USB.
 """
 
+import configparser
 import json
 import math
 import queue
@@ -72,7 +78,8 @@ class LEDController:
 		self.breath_period = self.DEFAULT_BREATH_PERIOD
 		self.breath_floor  = self.DEFAULT_BREATH_FLOOR
 		self.fps           = self.DEFAULT_FPS
-		self.apply_config(hardware_path)
+		self.disabled      = False
+		self.apply_hardware_config(hardware_path)
 
 		self._device = device if device is not None else respeaker.get_device()
 		if not self._device.available:
@@ -97,7 +104,7 @@ class LEDController:
 	# Public API
 	# -------------------------------------------------------------------------
 
-	def apply_config(self, hardware_path: str) -> None:
+	def apply_hardware_config(self, hardware_path: str) -> None:
 		"""Read the optional 'led' block from the character JSON."""
 		try:
 			with open(hardware_path, 'r') as f:
@@ -112,6 +119,30 @@ class LEDController:
 		self.breath_period = max(0.2, float(led.get('breath_period', self.DEFAULT_BREATH_PERIOD)))
 		self.breath_floor  = max(0.0, min(1.0, float(led.get('breath_floor', self.DEFAULT_BREATH_FLOOR))))
 		self.fps           = max(1, min(60, int(led.get('fps', self.DEFAULT_FPS))))
+
+	def apply_config(self, path: str) -> None:
+		"""Read [LED] LEDDisable from config.cfg. Called on every config load,
+		so the flag can be flipped at runtime."""
+		config = configparser.ConfigParser()
+		try:
+			config.read(path)
+		except configparser.Error as e:
+			print(f"LEDController: failed to parse config at '{path}': {e}")
+			return
+
+		try:
+			disabled = config.getboolean("LED", "LEDDisable", fallback=False)
+		except ValueError:
+			raw = config.get("LED", "LEDDisable", fallback="")
+			print(f"LEDController: LEDDisable='{raw}' is not a 0/1 value, treating as 0.")
+			disabled = False
+
+		if disabled == self.disabled:
+			return
+
+		self.disabled = disabled
+		print(f"LEDController: LEDs {'disabled' if disabled else 'enabled'} by config.")
+		self._request_refresh()
 
 	def set_state(self, state: str) -> None:
 		"""Queue a state change. Returns immediately — never touches USB on the
@@ -172,7 +203,21 @@ class LEDController:
 		"""Reconnection and USB failure handling belong to the shared device."""
 		return self._device.write(name, values)
 
+	# Queued instead of a state to mean "re-apply the current state".
+	_REFRESH = None
+
+	def _request_refresh(self) -> None:
+		"""Re-apply the current state on the worker thread — apply_config runs
+		on a socket thread and must not touch USB."""
+		self._queue.put(self._REFRESH)
+
 	def _enter_state(self, state: str) -> None:
+		# Held here rather than at _write, so the ring is driven dark rather
+		# than left showing whatever it had when the flag went on.
+		if self.disabled:
+			self._write("LED_EFFECT", [EFFECT_OFF])
+			return
+
 		if state == self.STATE_OFF:
 			self._write("LED_EFFECT", [EFFECT_OFF])
 
@@ -197,21 +242,33 @@ class LEDController:
 
 	def _worker(self) -> None:
 		while True:
-			# Only the animated state needs a frame clock; the others block.
-			timeout = (1.0 / self.fps) if self._state == self.STATE_THINKING else None
+			# Only the animated state needs a frame clock; the others block,
+			# a disabled ring included.
+			animating = self._state == self.STATE_THINKING and not self.disabled
+			timeout = (1.0 / self.fps) if animating else None
 			try:
-				state = self._queue.get(timeout=timeout)
+				item = self._queue.get(timeout=timeout)
 
-				# Coalesce: if more states are queued, only the last matters.
+				# Coalesce: only the last state matters, but a refresh anywhere
+				# in the batch still counts — the config may have changed
+				# without the state moving.
+				pending = None
+				refresh = False
 				while True:
+					if item is self._REFRESH:
+						refresh = True
+					else:
+						pending = item
 					try:
-						state = self._queue.get_nowait()
+						item = self._queue.get_nowait()
 					except queue.Empty:
 						break
 
-				if state != self._state:
-					self._state = state
-					self._enter_state(state)
+				if pending is not None and pending != self._state:
+					self._state = pending
+					self._enter_state(self._state)
+				elif refresh:
+					self._enter_state(self._state)
 			except queue.Empty:
 				self._animate_frame()
 

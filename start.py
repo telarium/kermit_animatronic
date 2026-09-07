@@ -203,6 +203,7 @@ class Kermit:
 		self.llm.apply_config(resolved)
 		self.tts.apply_config(resolved)
 		self.wakeword.apply_config(resolved)
+		self.led_controller.apply_config(resolved)
 		self._config_data = self._build_config_data(resolved)
 		self.web_server.broadcast('configLoaded', self._config_data)
 
@@ -212,8 +213,13 @@ class Kermit:
 	BROADCAST_EXCLUDED_SECTIONS = ("wifi", "hardware")
 
 	def _build_config_data(self, path: str) -> dict:
-		"""Parse the config file into {section: {key: value}} for the web UI."""
-		return utils.build_config_data(path, self.BROADCAST_EXCLUDED_SECTIONS)
+		"""Parse the config file into {section: {key: value}} for the web UI.
+		The template fills in keys added after a config was written, so an
+		older config still offers newer settings."""
+		return utils.build_config_data(
+			path, self.BROADCAST_EXCLUDED_SECTIONS,
+			template_path=os.path.join(_BASE_DIR, utils.TEMPLATE_FILENAME),
+		)
 
 	def _build_key_map(self, hardware: dict) -> list:
 		"""Build the movement key list for the web keypad grid from the
