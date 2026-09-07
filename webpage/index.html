@@ -58,9 +58,14 @@
                 <!-- Show Controls -->
                 <div class="card" id="show-card">
                     <div id="showControls">
-                        <select id="showListDropdown" name="Show List" aria-label="Show list">
-                            <!-- Options will be dynamically inserted here -->
-                        </select>
+                        <div id="showOnDeck" class="empty" role="button" tabindex="0"
+                             aria-haspopup="dialog" title="Choose a show"
+                             onclick="openShowPopup(); return false;">
+                            <span id="showOnDeckName">-- Select A Show! --</span>
+                            <svg class="on-deck-caret" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                <polyline points="6,9 12,15 18,9" />
+                            </svg>
+                        </div>
                         <div class="button-row">
                             <button id="playButton" type="button" title="Play">
                                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
@@ -102,6 +107,28 @@
                     <label for="wifiPassword">Password:</label>
                     <input type="password" id="wifiPassword" placeholder="Enter WiFi password" />
                     <button id="connectWifiButton">Connect</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Show Selection Popup -->
+        <div id="showPopup" class="popup-overlay" style="display: none;">
+            <div class="popup-content show-popup-content">
+                <button id="closeShowPopup" class="close-button">&times;</button>
+                <h2>Select a Show</h2>
+                <div id="showListControls">
+                    <button id="showSortButton" type="button" title="Sorted A to Z — tap for Z to A">
+                        <svg class="sort-arrow" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                            <polyline points="12,4 12,20" />
+                            <polyline points="6,14 12,20 18,14" />
+                        </svg>
+                        <span id="showSortLabel">A–Z</span>
+                    </button>
+                    <input type="text" id="showFilterInput" placeholder="Filter shows…"
+                           autocomplete="off" aria-label="Filter shows" />
+                </div>
+                <div id="showListContainer" class="show-list" aria-label="Available shows">
+                    <!-- Show names are populated dynamically from the loaded show list -->
                 </div>
             </div>
         </div>

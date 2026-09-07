@@ -43,6 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	setupConfigPopupEvents();
 	setupModeCheckboxes();
 	setupSubmitTTS();
+	setupShowSelectorEvents();
 	setupShowControlButtons();
 	setupPasswordEnterKey();
 });
@@ -392,24 +393,281 @@ function setupConfigPopupEvents() {
 	}
 }
 
-// Handle show list loading
+// -------------------------------------------------------------------------
+// Show selection
+// -------------------------------------------------------------------------
+
+// The show list as the server sent it, the one currently "on deck", and the
+// subset the popup is showing after the filter and sort are applied.
 let showList = [];
-socket.on('showListLoaded', (data) => {
-	showList = ["-- Select A Show! --", ...data];
+let selectedShow = null;
+let visibleShows = [];
+let showSortAscending = true;
 
-	const dropdown = document.querySelector('select[name="Show List"]');
-	if (dropdown) {
-		dropdown.innerHTML = '';
+const NO_SHOW_SELECTED = '-- Select A Show! --';
 
-		showList.forEach(item => {
-			const option = document.createElement('option');
-			option.value = item;
-			option.textContent = item;
-			dropdown.appendChild(option);
+/**
+ * Fold a show name or a filter query into comparable form. Show names are
+ * filename stems, so they carry punctuation and casing a typist won't
+ * reproduce — "Gin & Juice - Snoop Frogg" has to match a typed "gin juice".
+ * @param {string} text
+ * @returns {string} - Lowercased, alphanumeric words separated by spaces.
+ */
+function normalizeShowText(text) {
+	return String(text ?? '')
+		.toLowerCase()
+		.replace(/[&+]/g, ' and ')
+		.replace(/[^a-z0-9]+/g, ' ')
+		.trim();
+}
+
+/**
+ * True if every filter token appears somewhere in the show name. Tokens are
+ * ANDed, so typing a second word narrows rather than widens the list.
+ * @param {string} show
+ * @param {string[]} tokens - Already normalized.
+ */
+function showMatchesFilter(show, tokens) {
+	if (tokens.length === 0) {
+		return true;
+	}
+	const haystack = normalizeShowText(show);
+	return tokens.every(token => haystack.includes(token));
+}
+
+/**
+ * Update the on-deck display in the show card to match selectedShow.
+ */
+function updateShowOnDeck() {
+	const onDeck = document.getElementById('showOnDeck');
+	const label = document.getElementById('showOnDeckName');
+	if (!onDeck || !label) {
+		console.warn('Show on-deck element not found!');
+		return;
+	}
+	label.textContent = selectedShow || NO_SHOW_SELECTED;
+	onDeck.classList.toggle('empty', !selectedShow);
+	onDeck.title = selectedShow
+		? `On deck: ${selectedShow} — tap to change`
+		: 'Choose a show';
+}
+
+/**
+ * (Re)build the list inside the show popup from showList, applying the
+ * current filter text and sort direction.
+ */
+function buildShowListPanel() {
+	const container = document.getElementById('showListContainer');
+	if (!container) {
+		console.warn('Show list container not found!');
+		return;
+	}
+
+	container.innerHTML = '';
+
+	const filterInput = document.getElementById('showFilterInput');
+	const tokens = normalizeShowText(filterInput ? filterInput.value : '')
+		.split(' ')
+		.filter(Boolean);
+
+	visibleShows = showList.filter(show => showMatchesFilter(show, tokens));
+	// numeric so "Track 2" sorts before "Track 10"; base sensitivity so
+	// casing doesn't split the alphabet in two.
+	visibleShows.sort((a, b) => {
+		const order = a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+		return showSortAscending ? order : -order;
+	});
+
+	if (showList.length === 0 || visibleShows.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'show-list-empty';
+		empty.textContent = showList.length === 0
+			? 'No shows available.'
+			: 'No shows match that filter.';
+		container.appendChild(empty);
+		return;
+	}
+
+	visibleShows.forEach(show => {
+		const item = document.createElement('div');
+		item.className = 'show-item';
+		if (show === selectedShow) {
+			item.classList.add('selected');
+		}
+		item.dataset.show = show;
+		item.setAttribute('role', 'button');
+		item.setAttribute('tabindex', '0');
+		// textContent, never innerHTML — show names come from filenames on a
+		// USB drive and must never be able to inject markup.
+		item.textContent = show;
+		item.title = show;
+
+		item.addEventListener('click', () => chooseShow(show));
+		item.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				chooseShow(show);
+			}
+		});
+
+		container.appendChild(item);
+	});
+}
+
+/**
+ * Put a show on deck and close the panel. Loading happens on Play — this
+ * only changes what Play will send.
+ * @param {string} show
+ */
+function chooseShow(show) {
+	selectedShow = show;
+	updateShowOnDeck();
+	closeShowPopup();
+	console.log(`Show on deck: ${show}`);
+}
+
+function setShowSortAscending(ascending) {
+	showSortAscending = !!ascending;
+	localStorage.setItem('showSortAscending', showSortAscending);
+
+	const label = document.getElementById('showSortLabel');
+	if (label) {
+		label.textContent = showSortAscending ? 'A–Z' : 'Z–A';
+	}
+
+	const button = document.getElementById('showSortButton');
+	if (button) {
+		button.classList.toggle('descending', !showSortAscending);
+		button.title = showSortAscending
+			? 'Sorted A to Z — tap for Z to A'
+			: 'Sorted Z to A — tap for A to Z';
+	}
+}
+
+function openShowPopup() {
+	const popup = document.getElementById('showPopup');
+	if (!popup) {
+		console.warn('Show Popup element not found!');
+		return;
+	}
+
+	// Always open on the full list — a filter left over from last time would
+	// look like shows had gone missing.
+	const filterInput = document.getElementById('showFilterInput');
+	if (filterInput) {
+		filterInput.value = '';
+	}
+
+	buildShowListPanel();
+	popup.style.display = 'flex';
+
+	// Bring the current pick into view, so reopening a long list doesn't
+	// start at the top every time.
+	const current = popup.querySelector('.show-item.selected');
+	if (current) {
+		current.scrollIntoView({ block: 'nearest' });
+	}
+
+	// Not on mobile: the on-screen keyboard would cover the list the user
+	// opened the panel to look at.
+	if (filterInput && !isMobileDevice()) {
+		filterInput.focus();
+	}
+}
+
+function closeShowPopup() {
+	const popup = document.getElementById('showPopup');
+	if (popup) {
+		popup.style.display = 'none';
+	} else {
+		console.warn('Show Popup element not found!');
+	}
+}
+
+function setupShowSelectorEvents() {
+	setShowSortAscending(localStorage.getItem('showSortAscending') !== 'false');
+	updateShowOnDeck();
+
+	const onDeck = document.getElementById('showOnDeck');
+	if (onDeck) {
+		onDeck.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openShowPopup();
+			}
 		});
 	} else {
-		console.warn('Show List dropdown not found!');
+		console.warn('Show on-deck element not found!');
 	}
+
+	const closeButton = document.getElementById('closeShowPopup');
+	if (closeButton) {
+		closeButton.addEventListener('click', closeShowPopup);
+	} else {
+		console.warn('Close Show Popup button not found!');
+	}
+
+	const sortButton = document.getElementById('showSortButton');
+	if (sortButton) {
+		sortButton.addEventListener('click', () => {
+			setShowSortAscending(!showSortAscending);
+			buildShowListPanel();
+		});
+	} else {
+		console.warn('Show Sort Button not found!');
+	}
+
+	const filterInput = document.getElementById('showFilterInput');
+	if (filterInput) {
+		filterInput.addEventListener('input', buildShowListPanel);
+		filterInput.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				// First Escape clears the filter, a second closes the panel.
+				if (filterInput.value) {
+					filterInput.value = '';
+					buildShowListPanel();
+				} else {
+					closeShowPopup();
+				}
+			} else if (e.key === 'Enter') {
+				// Filter down to what you want, hit Enter, done.
+				e.preventDefault();
+				if (visibleShows.length > 0) {
+					chooseShow(visibleShows[0]);
+				}
+			}
+		});
+	} else {
+		console.warn('Show Filter input not found!');
+	}
+
+	const popupOverlay = document.getElementById('showPopup');
+	if (popupOverlay) {
+		popupOverlay.addEventListener('click', (e) => {
+			if (e.target === popupOverlay) {
+				closeShowPopup();
+			}
+		});
+	} else {
+		console.warn('Show Popup overlay not found!');
+	}
+}
+
+socket.on('showListLoaded', (data) => {
+	showList = Array.isArray(data) ? data : [];
+	console.log(`Show list loaded: ${showList.length} show(s)`);
+
+	// A USB drive coming or going swaps the whole show directory, which can
+	// take the on-deck show with it. Drop it rather than leaving Play
+	// pointed at a show that no longer exists.
+	if (selectedShow && !showList.includes(selectedShow)) {
+		console.log(`Show '${selectedShow}' is no longer available, clearing.`);
+		selectedShow = null;
+	}
+
+	updateShowOnDeck();
+	buildShowListPanel();
 });
 
 // Handle play, pause, and stop button state based on show status
@@ -452,19 +710,14 @@ function setupShowControlButtons() {
 
 	if (playButton) {
 		playButton.addEventListener('click', () => {
-			const dropdown = document.getElementById('showListDropdown');
-			const selectedShow = dropdown ? dropdown.value : null;
-
-			if (selectedShow) {
-				if (dropdown.selectedIndex === 0) {
-					alert('Please select a show first!');
-				} else {
-					socket.emit('showPlay', selectedShow);
-					console.log(`Playing show: ${selectedShow}`);
-				}
-			} else {
+			if (!selectedShow) {
+				// Nothing on deck — open the panel rather than just complaining.
 				console.warn('No show selected.');
+				openShowPopup();
+				return;
 			}
+			socket.emit('showPlay', selectedShow);
+			console.log(`Playing show: ${selectedShow}`);
 		});
 	} else {
 		console.warn('Play Button not found!');
