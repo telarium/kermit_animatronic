@@ -130,6 +130,21 @@
                 <div id="showListContainer" class="show-list" aria-label="Available shows">
                     <!-- Show names are populated dynamically from the loaded show list -->
                 </div>
+                <div id="showUploadControls">
+                    <input type="file" id="showUploadInput" accept=".shw,.mid,.midi,.mp3,.wav,.ogg"
+                           multiple hidden />
+                    <!-- Second picker, for completing a half-chosen MIDI show -->
+                    <input type="file" id="showUploadPairInput" hidden />
+                    <button id="showUploadButton" type="button">Upload a show…</button>
+                    <div id="showUploadPending" style="display: none;">
+                        <span id="showUploadPendingText"></span>
+                        <div id="showUploadPendingButtons">
+                            <button id="showUploadPairButton" type="button">Choose file…</button>
+                            <button id="showUploadCancelButton" type="button">Cancel</button>
+                        </div>
+                    </div>
+                    <div id="showUploadStatus" aria-live="polite"></div>
+                </div>
             </div>
         </div>
 
