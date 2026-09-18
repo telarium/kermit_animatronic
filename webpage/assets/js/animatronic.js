@@ -45,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	setupSubmitTTS();
 	setupShowSelectorEvents();
 	setupShowControlButtons();
+	setupShowUploadEvents();
 	setupPasswordEnterKey();
 });
 
@@ -558,6 +559,12 @@ function openShowPopup() {
 		filterInput.value = '';
 	}
 
+	// Likewise the upload row: a half-chosen set from last time is stale.
+	if (!showUploadInFlight) {
+		clearShowUploadPrompt();
+		setShowUploadStatus('', '');
+	}
+
 	buildShowListPanel();
 	popup.style.display = 'flex';
 
@@ -651,6 +658,285 @@ function setupShowSelectorEvents() {
 		});
 	} else {
 		console.warn('Show Popup overlay not found!');
+	}
+}
+
+// -------------------------------------------------------------------------
+// Show upload
+// -------------------------------------------------------------------------
+
+const SHW_EXTENSIONS   = ['.shw'];
+const MIDI_EXTENSIONS  = ['.mid', '.midi'];
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg'];
+
+// The half of a MIDI show already chosen, held here until its partner is
+// picked so both go up in one request — the server only ever sees complete
+// sets, and an abandoned half never reaches storage.
+let pendingShowFile = null;
+let pendingShowNeeds = null;   // 'midi' or 'audio'
+let showUploadInFlight = false;
+
+/**
+ * @param {File} file
+ * @returns {string} - Lowercased extension including the dot, or ''.
+ */
+function showFileExtension(file) {
+	const name = String((file && file.name) || '');
+	const dot = name.lastIndexOf('.');
+	return dot === -1 ? '' : name.slice(dot).toLowerCase();
+}
+
+/**
+ * @param {File} file
+ * @returns {string} - The filename without its extension.
+ */
+function showFileStem(file) {
+	const name = String((file && file.name) || '');
+	const dot = name.lastIndexOf('.');
+	return dot === -1 ? name : name.slice(0, dot);
+}
+
+/**
+ * @param {File} file
+ * @returns {string|null} - 'shw', 'midi', 'audio', or null if unsupported.
+ */
+function classifyShowFile(file) {
+	const ext = showFileExtension(file);
+	if (SHW_EXTENSIONS.includes(ext)) return 'shw';
+	if (MIDI_EXTENSIONS.includes(ext)) return 'midi';
+	if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+	return null;
+}
+
+function setShowUploadStatus(message, cls) {
+	const status = document.getElementById('showUploadStatus');
+	if (!status) {
+		console.warn('Show upload status element not found!');
+		return;
+	}
+	status.textContent = message || '';
+	status.className = cls || '';
+}
+
+/**
+ * Show the row asking for the other half of a MIDI show.
+ * @param {string} needs - 'midi' or 'audio'.
+ */
+function showUploadPrompt(needs) {
+	const row = document.getElementById('showUploadPending');
+	const text = document.getElementById('showUploadPendingText');
+	const input = document.getElementById('showUploadPairInput');
+	if (!row || !text || !input) {
+		console.warn('Show upload pending elements not found!');
+		return;
+	}
+
+	pendingShowNeeds = needs;
+	text.textContent = needs === 'midi'
+		? `"${pendingShowFile.name}" needs a matching MIDI file.`
+		: `"${pendingShowFile.name}" needs a matching audio file.`;
+	input.accept = needs === 'midi' ? '.mid,.midi' : '.mp3,.wav,.ogg';
+	input.value = '';
+	row.style.display = 'block';
+}
+
+function clearShowUploadPrompt() {
+	pendingShowFile = null;
+	pendingShowNeeds = null;
+	const row = document.getElementById('showUploadPending');
+	if (row) {
+		row.style.display = 'none';
+	}
+}
+
+/**
+ * Sort a chosen batch into a complete set to upload, or a prompt for the
+ * missing half.
+ * @param {FileList} fileList
+ */
+function handleShowFilesChosen(fileList) {
+	const files = Array.from(fileList || []);
+	if (files.length === 0) {
+		return;
+	}
+	clearShowUploadPrompt();
+
+	const shw   = files.filter(f => classifyShowFile(f) === 'shw');
+	const midi  = files.filter(f => classifyShowFile(f) === 'midi');
+	const audio = files.filter(f => classifyShowFile(f) === 'audio');
+
+	if (shw.length + midi.length + audio.length !== files.length) {
+		setShowUploadStatus('Only .shw, MIDI and audio files can be uploaded.', 'error');
+		return;
+	}
+
+	if (shw.length > 0) {
+		if (shw.length > 1 || midi.length > 0 || audio.length > 0) {
+			setShowUploadStatus('Upload a Program Blue show on its own.', 'error');
+			return;
+		}
+		uploadShowSet([shw[0]], showFileStem(shw[0]));
+		return;
+	}
+
+	if (midi.length === 1 && audio.length === 1) {
+		// The audio file carries the song title, so its stem names the show.
+		uploadShowSet([midi[0], audio[0]], showFileStem(audio[0]));
+		return;
+	}
+
+	if (midi.length === 1 && audio.length === 0) {
+		pendingShowFile = midi[0];
+		showUploadPrompt('audio');
+		setShowUploadStatus('Now choose the audio file that goes with it.', '');
+		return;
+	}
+
+	if (audio.length === 1 && midi.length === 0) {
+		pendingShowFile = audio[0];
+		showUploadPrompt('midi');
+		setShowUploadStatus('Now choose the MIDI file that goes with it.', '');
+		return;
+	}
+
+	setShowUploadStatus('A MIDI show needs one MIDI file and one audio file.', 'error');
+}
+
+/**
+ * The second half of a MIDI show. Anything other than exactly the file type
+ * being waited on fails the whole set rather than uploading half of it.
+ * @param {FileList} fileList
+ */
+function handleShowPairChosen(fileList) {
+	const files = Array.from(fileList || []);
+	if (!pendingShowFile || files.length !== 1 ||
+		classifyShowFile(files[0]) !== pendingShowNeeds) {
+		setShowUploadStatus('Upload failed — that set was never completed.', 'error');
+		clearShowUploadPrompt();
+		return;
+	}
+
+	const partner = files[0];
+	const midi  = pendingShowNeeds === 'midi' ? partner : pendingShowFile;
+	const audio = pendingShowNeeds === 'midi' ? pendingShowFile : partner;
+	clearShowUploadPrompt();
+	uploadShowSet([midi, audio], showFileStem(audio));
+}
+
+/**
+ * POST a complete set to the server. Files go over HTTP rather than the
+ * socket because a show's audio runs to tens of megabytes.
+ * @param {File[]} files
+ * @param {string} showName - What the set will be called once stored.
+ */
+function uploadShowSet(files, showName) {
+	if (showUploadInFlight) {
+		setShowUploadStatus('An upload is already running.', 'error');
+		return;
+	}
+	if (showList.includes(showName) &&
+		!confirm(`A show named "${showName}" already exists. Replace it?`)) {
+		setShowUploadStatus('Upload cancelled.', '');
+		return;
+	}
+
+	const form = new FormData();
+	files.forEach(file => form.append('files', file, file.name));
+
+	const request = new XMLHttpRequest();
+	request.open('POST', '/uploadShow');
+
+	request.upload.addEventListener('progress', (e) => {
+		if (!e.lengthComputable) return;
+		const percent = Math.round((e.loaded / e.total) * 100);
+		setShowUploadStatus(`Uploading ${showName}… ${percent}%`, '');
+	});
+
+	request.addEventListener('load', () => {
+		showUploadInFlight = false;
+		let result = {};
+		try {
+			result = JSON.parse(request.responseText || '{}');
+		} catch (e) {
+			console.warn('Could not parse upload response', e);
+		}
+		if (!result.success) {
+			setShowUploadStatus(result.message || `Upload failed (${request.status}).`, 'error');
+			return;
+		}
+		setShowUploadStatus(
+			result.warning ? `${result.message} (${result.warning})` : result.message,
+			'success');
+		console.log(`Uploaded show: ${result.show}`);
+		if (result.kind === 'midi') {
+			promptProgramBlueConversion(result.show);
+		}
+	});
+
+	request.addEventListener('error', () => {
+		showUploadInFlight = false;
+		setShowUploadStatus('Upload failed — the connection dropped.', 'error');
+	});
+
+	showUploadInFlight = true;
+	setShowUploadStatus(`Uploading ${showName}…`, '');
+	request.send(form);
+}
+
+/**
+ * Offer to turn a freshly uploaded MIDI show into a Program Blue one. The
+ * conversion happens server-side and replaces the MIDI/audio pair.
+ * @param {string} showName
+ */
+function promptProgramBlueConversion(showName) {
+	if (!confirm(`Convert "${showName}" to a Program Blue show?`)) {
+		return;
+	}
+	setShowUploadStatus(`Converting ${showName}… this can take a while.`, '');
+	socket.emit('onConvertShow', showName);
+}
+
+socket.on('showConvertResult', (result) => {
+	if (!result || !result.success) {
+		setShowUploadStatus((result && result.message) || 'Conversion failed.', 'error');
+		return;
+	}
+	setShowUploadStatus(
+		result.warning ? `${result.message} (${result.warning})` : result.message,
+		'success');
+});
+
+function setupShowUploadEvents() {
+	const uploadButton = document.getElementById('showUploadButton');
+	const uploadInput = document.getElementById('showUploadInput');
+	if (uploadButton && uploadInput) {
+		uploadButton.addEventListener('click', () => {
+			// Cleared first, so re-picking the same file still fires change.
+			uploadInput.value = '';
+			uploadInput.click();
+		});
+		uploadInput.addEventListener('change', () => handleShowFilesChosen(uploadInput.files));
+	} else {
+		console.warn('Show Upload button or input not found!');
+	}
+
+	const pairButton = document.getElementById('showUploadPairButton');
+	const pairInput = document.getElementById('showUploadPairInput');
+	if (pairButton && pairInput) {
+		pairButton.addEventListener('click', () => pairInput.click());
+		pairInput.addEventListener('change', () => handleShowPairChosen(pairInput.files));
+	} else {
+		console.warn('Show Upload pair button or input not found!');
+	}
+
+	const cancelButton = document.getElementById('showUploadCancelButton');
+	if (cancelButton) {
+		cancelButton.addEventListener('click', () => {
+			clearShowUploadPrompt();
+			setShowUploadStatus('Upload cancelled.', '');
+		});
+	} else {
+		console.warn('Show Upload cancel button not found!');
 	}
 }
 
