@@ -2,7 +2,7 @@ import os
 import socket
 import threading
 import logging
-from flask import Flask, request, Response
+from flask import Flask, jsonify, request, Response
 from flask_socketio import SocketIO
 from pydispatch import dispatcher
 from typing import Any
@@ -18,6 +18,12 @@ app.config['SECRET_KEY'] = 'Monkey Island is an amusement park.'
 # Overridden via the "html" section of the hardware JSON (see WebServer.__init__).
 app.config['HTML_TITLE'] = 'Animatronic Controller'
 app.config['CSS_FILE']   = 'assets/css/kermit.css'
+
+# Uploaded shows are read into memory before being written out, so cap a
+# request at a size a long song comfortably fits inside.
+app.config['MAX_CONTENT_LENGTH'] = 256 * 1024 * 1024
+# Set by WebServer.set_upload_handler once the show uploader exists.
+app.config['UPLOAD_HANDLER'] = None
 
 # Use threading mode for async
 socketio = SocketIO(app, async_mode='threading', ping_timeout=30, logger=False, engineio_logger=False)
@@ -44,6 +50,27 @@ class WebServer:
 	@app.route('/<path:path>')
 	def static_proxy(path: str) -> Response:
 		return app.send_static_file(path)
+
+	@app.route('/uploadShow', methods=['POST'])
+	def upload_show() -> Response:
+		"""Receive an uploaded show set as multipart form data. Files go over
+		HTTP rather than the socket because a show's audio runs to tens of
+		megabytes."""
+		handler = app.config.get('UPLOAD_HANDLER')
+		if handler is None:
+			return jsonify({'success': False, 'message': 'Uploads are not available.'}), 503
+
+		uploads = request.files.getlist('files')
+		if not uploads:
+			return jsonify({'success': False, 'message': 'No files were uploaded.'}), 400
+
+		try:
+			result = handler([(f.filename, f.read()) for f in uploads])
+		except Exception as e:
+			print(f"Upload error: {e}")
+			return jsonify({'success': False, 'message': str(e)}), 500
+
+		return jsonify(result), 200 if result.get('success') else 400
 
 	@socketio.on('onConnect')
 	def connect_event(msg: Any) -> None:
@@ -96,6 +123,11 @@ class WebServer:
 		"""Receive config edits from the web UI as {section: {key: value}}."""
 		dispatcher.send(signal="configSave", updates=updates)
 
+	@socketio.on('onConvertShow')
+	def convert_show_event(show_name: str) -> None:
+		"""Convert an uploaded MIDI show into a ProgramBlue show."""
+		dispatcher.send(signal="convertShow", show_name=show_name)
+
 	@socketio.on('onRestoreBackup')
 	def restore_backup_event() -> None:
 		"""Copy the local backup onto an attached USB drive."""
@@ -122,6 +154,11 @@ class WebServer:
 		http_thread = threading.Thread(target=self.run_http, daemon=True)
 		self.threads.append(http_thread)
 		http_thread.start()
+
+	def set_upload_handler(self, handler) -> None:
+		"""Register the callable that writes an uploaded show to storage. It
+		is called on the HTTP thread and returns the result dict verbatim."""
+		app.config['UPLOAD_HANDLER'] = handler
 
 	def run_http(self) -> None:
 		try:
