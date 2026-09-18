@@ -72,6 +72,7 @@ from animation_controller import AnimationController
 from led_controller import LEDController
 from animatronic_movements import Movement
 from show_player import ShowPlayer
+from show_upload import ShowUploader
 from wifi_management import WifiManagement
 
 # Restore stderr now that all noisy imports are done
@@ -146,7 +147,12 @@ class Kermit:
 		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
 		self.show_player = ShowPlayer(pygame)
+		self.show_uploader = ShowUploader(_BASE_DIR, hardware_path)
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management, self.show_player)
+
+		# Uploads come in over HTTP rather than the socket, so the web server
+		# needs the handler directly instead of a dispatcher signal.
+		self.web_server.set_upload_handler(self.on_show_upload)
 
 		self.set_dispatch_events()
 		self.wakeword.set_enabled(True)
@@ -178,6 +184,7 @@ class Kermit:
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
 		dispatcher.connect(self.on_config_save, signal='configSave', sender=dispatcher.Any)
+		dispatcher.connect(self.on_convert_show, signal='convertShow', sender=dispatcher.Any)
 
 	def load_config(self, path: str = "", apply_wifi: bool = True) -> None:
 		"""Resolve where the config and shows live (USB first, then the local
@@ -344,6 +351,25 @@ class Kermit:
 		except Exception as e:
 			print(f"Error during shutdown: {e}")
 			sys.exit(1)
+
+	def on_show_upload(self, files: list) -> dict:
+		"""Write an uploaded show set to storage and refresh the show list.
+		Runs on the HTTP thread, so the result is returned to the caller
+		rather than broadcast."""
+		result = self.show_uploader.upload(files)
+		if result.get('success'):
+			self.show_player.get_show_list()
+		return result
+
+	def on_convert_show(self, show_name: str) -> None:
+		"""Convert an uploaded MIDI show to ProgramBlue. Runs off the socket
+		thread — the converter transcodes the whole audio track."""
+		def convert():
+			result = self.show_uploader.convert_to_program_blue(show_name)
+			if result.get('success'):
+				self.show_player.get_show_list()
+			self.web_server.broadcast('showConvertResult', result)
+		threading.Thread(target=convert, daemon=True).start()
 
 	def on_show_list_load(self, show_list: any) -> None:
 		self.web_server.broadcast('showListLoaded', show_list)
