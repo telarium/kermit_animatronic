@@ -125,7 +125,7 @@ def ensure_local_config(base_dir: str) -> str:
 	return local_cfg
 
 
-def _directory_size(path: str) -> int:
+def directory_size(path: str) -> int:
 	"""Total size in bytes of the files directly inside path."""
 	total = 0
 	try:
@@ -154,7 +154,7 @@ def copy_new_files(src_dir: str, dst_dir: str, max_bytes: int = None) -> int:
 		print(f"Shows: could not create '{dst_dir}': {e}")
 		return 0
 
-	used = _directory_size(dst_dir) if max_bytes is not None else 0
+	used = directory_size(dst_dir) if max_bytes is not None else 0
 	copied = 0
 	for name in sorted(os.listdir(src_dir)):
 		src = os.path.join(src_dir, name)
