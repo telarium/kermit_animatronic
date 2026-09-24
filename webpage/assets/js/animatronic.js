@@ -336,6 +336,7 @@ function openConfigPopup() {
 	const popup = document.getElementById('configPopup');
 	if (popup) {
 		popup.style.display = 'flex';
+		markOverlayOpened(popup);
 	} else {
 		console.warn('Config Popup element not found!');
 	}
@@ -406,15 +407,7 @@ function setupConfigPopupEvents() {
 		console.warn('Restore Backup Button not found!');
 	}
 
-	if (popupOverlay) {
-		popupOverlay.addEventListener('click', (e) => {
-			if (e.target === popupOverlay) {
-				closeConfigPopup();
-			}
-		});
-	} else {
-		console.warn('Config Popup overlay not found!');
-	}
+	setupOverlayDismiss(popupOverlay, closeConfigPopup, 'Config Popup');
 }
 
 // -------------------------------------------------------------------------
@@ -437,6 +430,79 @@ const NO_SHOW_SELECTED = '-- Select A Show! --';
  * @param {string} text
  * @returns {string} - Lowercased, alphanumeric words separated by spaces.
  */
+// -------------------------------------------------------------------------
+// Popup dismissal
+// -------------------------------------------------------------------------
+
+// A popup opened by a tap can be closed again by that very same tap. The
+// overlay covers the whole screen, including the control that opened it, and
+// the overlay's job is to dismiss on click — so any second click event from
+// one press (a touchscreen's compatibility click after touchend, a stray
+// double fire) lands on the overlay and shuts the popup before it is seen.
+// Two guards, because the two causes are different: ignore dismissals for a
+// moment after opening, and require the press and the release to both land on
+// the backdrop, tracked through pointer events rather than click.
+const OVERLAY_DISMISS_GRACE_MS = 400;
+const overlayOpenedAt = new WeakMap();
+
+/**
+ * Record that an overlay just opened, starting its grace period.
+ * @param {HTMLElement} overlay
+ */
+function markOverlayOpened(overlay) {
+	if (overlay) {
+		overlayOpenedAt.set(overlay, performance.now());
+	}
+}
+
+/**
+ * Wire up press-outside-to-close on a popup overlay. Both the press and the
+ * release must land on the backdrop, and not within the grace period.
+ * @param {HTMLElement} overlay - The full-screen overlay element.
+ * @param {Function} closeFn - Called when the overlay is genuinely dismissed.
+ * @param {string} label - Name used in the not-found warning.
+ */
+function setupOverlayDismiss(overlay, closeFn, label) {
+	if (!overlay) {
+		console.warn(`${label} overlay not found!`);
+		return;
+	}
+
+	// Deliberately not the click event: a click fires on the nearest common
+	// ancestor of press and release, which is the overlay whenever either end
+	// of the gesture is on the backdrop. Pressing outside and releasing on the
+	// panel would read as an overlay click and close it. Pointer events let
+	// both ends be checked separately, and they also sidestep the
+	// compatibility click a touchscreen fires after touchend.
+	let pressedOnOverlay = false;
+
+	overlay.addEventListener('pointerdown', (e) => {
+		pressedOnOverlay = (e.target === overlay);
+	});
+
+	overlay.addEventListener('pointercancel', () => {
+		pressedOnOverlay = false;
+	});
+
+	overlay.addEventListener('pointerup', (e) => {
+		const pressed = pressedOnOverlay;
+		pressedOnOverlay = false;
+
+		// Both ends of the press have to be on the backdrop itself.
+		if (!pressed || e.target !== overlay) {
+			return;
+		}
+
+		// Too soon after opening to be a deliberate press.
+		const openedAt = overlayOpenedAt.get(overlay) ?? 0;
+		if (performance.now() - openedAt < OVERLAY_DISMISS_GRACE_MS) {
+			return;
+		}
+
+		closeFn();
+	});
+}
+
 function normalizeShowText(text) {
 	return String(text ?? '')
 		.toLowerCase()
@@ -590,6 +656,7 @@ function openShowPopup() {
 
 	buildShowListPanel();
 	popup.style.display = 'flex';
+	markOverlayOpened(popup);
 
 	// Bring the current pick into view, so reopening a long list doesn't
 	// start at the top every time.
@@ -672,16 +739,7 @@ function setupShowSelectorEvents() {
 		console.warn('Show Filter input not found!');
 	}
 
-	const popupOverlay = document.getElementById('showPopup');
-	if (popupOverlay) {
-		popupOverlay.addEventListener('click', (e) => {
-			if (e.target === popupOverlay) {
-				closeShowPopup();
-			}
-		});
-	} else {
-		console.warn('Show Popup overlay not found!');
-	}
+	setupOverlayDismiss(document.getElementById('showPopup'), closeShowPopup, 'Show Popup');
 }
 
 // -------------------------------------------------------------------------
@@ -1513,15 +1571,7 @@ function setupWifiPopupEvents() {
 		console.warn('Connect WiFi Button not found!');
 	}
 
-	if (popupOverlay) {
-		popupOverlay.addEventListener('click', (e) => {
-			if (e.target === popupOverlay) {
-				closeWifiPopup();
-			}
-		});
-	} else {
-		console.warn('WiFi Popup overlay not found!');
-	}
+	setupOverlayDismiss(popupOverlay, closeWifiPopup, 'WiFi Popup');
 }
 
 function openWifiPopup() {
@@ -1529,6 +1579,7 @@ function openWifiPopup() {
 	const popup = document.getElementById('wifiPopup');
 	if (popup) {
 		popup.style.display = 'flex';
+		markOverlayOpened(popup);
 	} else {
 		console.warn('WiFi Popup element not found!');
 	}
