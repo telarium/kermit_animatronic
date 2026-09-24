@@ -429,6 +429,37 @@ hr {
 }
 
 /* =========================================================
+   Documentation indicator (upper-right, left of the gear)
+   ========================================================= */
+#helpIndicator {
+    position: fixed;
+    top: 0.75em;
+    /* Clears the gear: its own 0.75em inset plus the 20px icon and a gap. */
+    right: 2.6em;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    color: #ffffff;
+    opacity: 0.75;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.2s ease;
+}
+
+#helpIndicator:hover,
+#helpIndicator:focus-visible {
+    opacity: 1;
+}
+
+#helpIcon .help-mark {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* =========================================================
    Config editor indicator (upper-right) + popup
    ========================================================= */
 #configIndicator {

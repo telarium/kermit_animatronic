@@ -25,6 +25,16 @@
             <span id="wifiSSIDLabel">Not connected</span>
         </div>
 
+        <!-- Documentation indicator (upper-right, left of the config gear) -->
+        <div id="helpIndicator" role="button" tabindex="0" title="Documentation"
+             onclick="openHelpDocument(); return false;">
+            <svg id="helpIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <circle class="help-mark" cx="12" cy="12" r="10" />
+                <path class="help-mark" d="M9.1 9.3a3 3 0 0 1 5.8 1c0 2-2.9 2.9-2.9 2.9" />
+                <line class="help-mark" x1="12" y1="17.3" x2="12.01" y2="17.3" />
+            </svg>
+        </div>
+
         <!-- Config editor indicator (upper-right corner) -->
         <div id="configIndicator" role="button" tabindex="0" title="Configuration"
              onclick="openConfigPopup(); return false;">

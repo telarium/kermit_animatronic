@@ -198,6 +198,13 @@ class Kermit:
 		self.shows_dir = shows_dir
 		self.show_player.set_show_directory(shows_dir)
 
+		# Any drive that is present leaves with the current documentation.
+		docs = utils.copy_docs_to_usb(
+			_BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
+		)
+		if docs:
+			print(f"Docs: {docs} document(s) on the USB drive are up to date.")
+
 		if not resolved:
 			self.config_path = None
 			print("Warning: No usable config found and none could be created. Continuing with no config.")

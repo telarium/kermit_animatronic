@@ -41,6 +41,7 @@ function isMobileDevice() {
 document.addEventListener('DOMContentLoaded', () => {
 	setupWifiPopupEvents();
 	setupConfigPopupEvents();
+	setupHelpEvents();
 	setupModeCheckboxes();
 	setupSubmitTTS();
 	setupShowSelectorEvents();
@@ -346,6 +347,28 @@ function closeConfigPopup() {
 		popup.style.display = 'none';
 	} else {
 		console.warn('Config Popup element not found!');
+	}
+}
+
+/**
+ * Open the documentation in a new tab. It is served from docs/ by the Flask
+ * route rather than the web root.
+ */
+function openHelpDocument() {
+	window.open('/help', '_blank', 'noopener');
+}
+
+function setupHelpEvents() {
+	const indicator = document.getElementById('helpIndicator');
+	if (indicator) {
+		indicator.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openHelpDocument();
+			}
+		});
+	} else {
+		console.warn('Help indicator not found!');
 	}
 }
 

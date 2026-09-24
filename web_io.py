@@ -2,10 +2,13 @@ import os
 import socket
 import threading
 import logging
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_from_directory
 from flask_socketio import SocketIO
 from pydispatch import dispatcher
 from typing import Any
+import utils
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Turn off extra log messages
 log = logging.getLogger('werkzeug')
@@ -50,6 +53,20 @@ class WebServer:
 	@app.route('/<path:path>')
 	def static_proxy(path: str) -> Response:
 		return app.send_static_file(path)
+
+	@app.route('/help')
+	def help_document() -> Response:
+		"""Serve the documentation from docs/, which sits outside the web root.
+		Sent inline, so the browser renders the PDF in the tab that opened it."""
+		docs_dir = os.path.join(_BASE_DIR, utils.DOCS_DIRNAME)
+		try:
+			names = sorted(n for n in os.listdir(docs_dir)
+			               if n.lower().endswith(utils.DOCUMENT_EXTENSIONS))
+		except OSError:
+			names = []
+		if not names:
+			return Response("No documentation found.", status=404, mimetype='text/plain')
+		return send_from_directory(docs_dir, names[0])
 
 	@app.route('/uploadShow', methods=['POST'])
 	def upload_show() -> Response:
