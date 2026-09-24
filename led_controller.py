@@ -48,6 +48,10 @@ from typing import Optional
 from pydispatch import dispatcher
 
 import respeaker
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 # LED_EFFECT values, from the XVF3800 control table.
 EFFECT_OFF      = 0
@@ -83,7 +87,7 @@ class LEDController:
 
 		self._device = device if device is not None else respeaker.get_device()
 		if not self._device.available:
-			print("LEDController: no ReSpeaker control available, LED control disabled.")
+			log.warning("LEDController: no ReSpeaker control available, LED control disabled.")
 
 		self._state = self.STATE_OFF
 		self._anim_start = 0.0
@@ -94,7 +98,7 @@ class LEDController:
 		self._thread.start()
 
 		self.set_dispatch_events()
-		print(f"LEDController: initialized (color=0x{self.color:06X}, "
+		log.info(f"LEDController: initialized (color=0x{self.color:06X}, "
 		      f"breath={self.breath_period}s @ {self.fps}fps).")
 
 	def set_dispatch_events(self) -> None:
@@ -110,7 +114,7 @@ class LEDController:
 			with open(hardware_path, 'r') as f:
 				config = json.load(f)
 		except Exception as e:
-			print(f"LEDController: could not read '{hardware_path}': {e}")
+			log.exception(f"LEDController: could not read '{hardware_path}': {e}")
 			return
 
 		led = config.get('led', {})
@@ -127,28 +131,28 @@ class LEDController:
 		try:
 			config.read(path)
 		except configparser.Error as e:
-			print(f"LEDController: failed to parse config at '{path}': {e}")
+			log.exception(f"LEDController: failed to parse config at '{path}': {e}")
 			return
 
 		try:
 			disabled = config.getboolean("LED", "LEDDisable", fallback=False)
 		except ValueError:
 			raw = config.get("LED", "LEDDisable", fallback="")
-			print(f"LEDController: LEDDisable='{raw}' is not a 0/1 value, treating as 0.")
+			log.error(f"LEDController: LEDDisable='{raw}' is not a 0/1 value, treating as 0.")
 			disabled = False
 
 		if disabled == self.disabled:
 			return
 
 		self.disabled = disabled
-		print(f"LEDController: LEDs {'disabled' if disabled else 'enabled'} by config.")
+		log.info(f"LEDController: LEDs {'disabled' if disabled else 'enabled'} by config.")
 		self._request_refresh()
 
 	def set_state(self, state: str) -> None:
 		"""Queue a state change. Returns immediately — never touches USB on the
 		caller's thread."""
 		if state not in (self.STATE_OFF, self.STATE_LISTENING, self.STATE_THINKING):
-			print(f"LEDController: unknown state '{state}', ignoring.")
+			log.warning(f"LEDController: unknown state '{state}', ignoring.")
 			return
 		self._queue.put(state)
 
@@ -187,7 +191,7 @@ class LEDController:
 			text = str(value).strip().lstrip('#')
 			return int(text, 16) & 0xFFFFFF
 		except Exception:
-			print(f"LEDController: could not parse color '{value}', using default.")
+			log.exception(f"LEDController: could not parse color '{value}', using default.")
 			return fallback
 
 	def _scaled_color(self, level: float) -> int:

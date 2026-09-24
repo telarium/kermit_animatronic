@@ -11,6 +11,10 @@ import os
 import threading
 import audio_setup
 from typing import List, Optional, Any
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 USB_VOICES_DIR = "/mnt/usb/voices"
 
@@ -59,7 +63,7 @@ class _SyncChannel:
 					continue
 				raw = audio_sync[name]
 				if not isinstance(raw, (int, float)) or isinstance(raw, bool):
-					print(f"VoicePlayer: {self.label}.audio_sync.{name} must be a number, ignoring '{raw}'")
+					log.warning(f"VoicePlayer: {self.label}.audio_sync.{name} must be a number, ignoring '{raw}'")
 					continue
 				values[name] = type(default)(raw)
 
@@ -72,7 +76,7 @@ class _SyncChannel:
 		self.interval_ms     = max(1, values["interval_ms"])
 
 		if self.close_threshold >= self.open_threshold:
-			print(f"VoicePlayer: {self.label} close_threshold >= open_threshold — hysteresis off, may chatter.")
+			log.info(f"VoicePlayer: {self.label} close_threshold >= open_threshold — hysteresis off, may chatter.")
 
 		self._a_attack  = 1.0 - math.exp(-self.interval_ms / float(self.attack_ms))
 		self._a_release = 1.0 - math.exp(-self.interval_ms / float(self.release_ms))
@@ -151,7 +155,7 @@ class VoicePlayer:
 				with open(hardware_path, 'r') as f:
 					movements = json.load(f).get('movements', [])
 			except (OSError, ValueError) as e:
-				print(f"VoicePlayer: could not read character config '{hardware_path}': {e}")
+				log.exception(f"VoicePlayer: could not read character config '{hardware_path}': {e}")
 
 		self.channels = []
 		for m in movements:
@@ -170,11 +174,11 @@ class VoicePlayer:
 		self.interval_ms = self.channels[0].interval_ms
 		for ch in self.channels[1:]:
 			if ch.interval_ms != self.interval_ms:
-				print(f"VoicePlayer: {ch.label} interval_ms={ch.interval_ms} ignored; "
+				log.info(f"VoicePlayer: {ch.label} interval_ms={ch.interval_ms} ignored; "
 				      f"using {self.interval_ms} from {self.channels[0].label}.")
 
 		for ch in self.channels:
-			print(f"VoicePlayer: driving {ch.describe()}")
+			log.info(f"VoicePlayer: driving {ch.describe()}")
 
 	def play(self, filename: str) -> None:
 		"""Play a single voice file, stopping anything currently playing."""
@@ -229,7 +233,7 @@ class VoicePlayer:
 		if os.path.isfile(local_path):
 			return local_path
 
-		print(f"VoicePlayer: file not found: '{filename}' (checked as-is, USB, and local voices/)")
+		log.warning(f"VoicePlayer: file not found: '{filename}' (checked as-is, USB, and local voices/)")
 		return None
 
 	def _wake_dac_if_needed(self) -> None:
@@ -242,7 +246,7 @@ class VoicePlayer:
 		audio_setup.wake_dac_if_needed(self.pygame)
 
 	def _play_sequence_worker(self, filenames: List[str]) -> None:
-		print(f"VoicePlayer: worker started, {len(filenames)} file(s)")
+		log.info(f"VoicePlayer: worker started, {len(filenames)} file(s)")
 		self._wake_dac_if_needed()
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True)
 		dispatcher.send(signal="updateStatus", id="Voice Playback", value="Speaking...")
@@ -257,10 +261,10 @@ class VoicePlayer:
 			try:
 				self._play_file(path)
 			except Exception as e:
-				print(f"VoicePlayer: error playing '{filename}': {e}")
+				log.exception(f"VoicePlayer: error playing '{filename}': {e}")
 
 		self._release_channels()
-		print(f"VoicePlayer: worker done, dispatching bPlaying=False")
+		log.info(f"VoicePlayer: worker done, dispatching bPlaying=False")
 		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False)
 
 	def _release_channels(self) -> None:
@@ -274,7 +278,7 @@ class VoicePlayer:
 
 	def _play_file(self, file_path: str) -> None:
 		if not self.pygame.mixer.get_init():
-			print(f"VoicePlayer: mixer not initialized, skipping '{file_path}'")
+			log.warning(f"VoicePlayer: mixer not initialized, skipping '{file_path}'")
 			return
 
 		sample_rate, data = self._load_audio_data(file_path)
@@ -316,7 +320,7 @@ class VoicePlayer:
 		deadline = time.monotonic() + 30
 		while self.pygame.mixer.music.get_busy() and not self._stop_event.is_set():
 			if time.monotonic() > deadline:
-				print("VoicePlayer: playback timeout, forcing stop.")
+				log.warning("VoicePlayer: playback timeout, forcing stop.")
 				self.pygame.mixer.music.stop()
 				break
 			time.sleep(0.01)

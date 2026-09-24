@@ -9,6 +9,10 @@ from typing import List, Optional
 from pydispatch import dispatcher
 from midi import parse_file as parse_midi_file
 from program_blue import parse_file as parse_shw_file
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 class ShowType(Enum):
@@ -51,7 +55,7 @@ class ShowPlayer:
 	def load_show(self, show_name: str) -> None:
 		if show_name == "":
 			if not self.show_list:
-				print("ShowPlayer: no shows available for random selection.")
+				log.warning("ShowPlayer: no shows available for random selection.")
 				return
 			show_name = random.choice(self.show_list)
 
@@ -65,7 +69,7 @@ class ShowPlayer:
 
 		audio_path, events, show_type = self._resolve_show(show_name)
 		if audio_path is None:
-			print(f"ShowPlayer: could not find show '{show_name}'.")
+			log.error(f"ShowPlayer: could not find show '{show_name}'.")
 			return
 
 		self.active_show_name = show_name
@@ -98,7 +102,7 @@ class ShowPlayer:
 		if not path or os.path.abspath(path) == os.path.abspath(self.show_dir):
 			return
 		self.show_dir = path
-		print(f"ShowPlayer: show directory is now '{self.show_dir}'")
+		log.info(f"ShowPlayer: show directory is now '{self.show_dir}'")
 		self.get_show_list()
 
 	def get_show_list(self) -> None:
@@ -123,7 +127,7 @@ class ShowPlayer:
 		self.show_list = found
 
 		if not found:
-			print(f"ShowPlayer: no shows found in '{self.show_dir}'.")
+			log.warning(f"ShowPlayer: no shows found in '{self.show_dir}'.")
 		# Sent either way, so switching to an empty directory clears the UI.
 		dispatcher.send(signal="showListLoad", show_list=found)
 
@@ -146,7 +150,7 @@ class ShowPlayer:
 				audio_path, events = parse_shw_file(shw_path)
 				channels = sorted(set(e[1] for e in events))
 				duration = max((e[0] for e in events), default=0)
-				print(f"ShowPlayer: {len(events)} events on channels {channels}, "
+				log.info(f"ShowPlayer: {len(events)} events on channels {channels}, "
 				      f"last at {duration}ms")
 				return audio_path, events, ShowType.PROGRAM_BLUE
 
@@ -155,7 +159,7 @@ class ShowPlayer:
 				audio_path = os.path.join(directory, show_name + ext)
 				midi_path  = os.path.join(directory, show_name + '.mid')
 				if os.path.isfile(audio_path) and os.path.isfile(midi_path):
-					print(f"ShowPlayer: loading MIDI show: {audio_path} + {midi_path}")
+					log.info(f"ShowPlayer: loading MIDI show: {audio_path} + {midi_path}")
 					events = parse_midi_file(midi_path)
 					return audio_path, events, ShowType.MIDI
 
@@ -179,7 +183,7 @@ class ShowPlayer:
 			# the level for the next one.
 			self.pygame.mixer.music.set_volume(self.SHOW_VOLUME)
 			self.pygame.mixer.music.play()
-			print(f"ShowPlayer: playing '{audio_path}' at {self.SHOW_VOLUME:.0%} volume")
+			log.info(f"ShowPlayer: playing '{audio_path}' at {self.SHOW_VOLUME:.0%} volume")
 
 			while not self._stop_event.is_set():
 				if not self.pygame.mixer.music.get_busy() and not self.paused:
@@ -193,7 +197,7 @@ class ShowPlayer:
 				time.sleep(0.01)
 
 		except Exception as e:
-			print(f"ShowPlayer: error during playback: {e}")
+			log.exception(f"ShowPlayer: error during playback: {e}")
 		finally:
 			self.pygame.mixer.music.stop()
 			self.paused = False

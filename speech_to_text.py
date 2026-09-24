@@ -8,6 +8,10 @@ import numpy as np
 import sherpa_onnx
 import mic_stream
 from pydispatch import dispatcher
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 class SpeechToText:
@@ -87,7 +91,7 @@ class SpeechToText:
 
 		self._recognizer = self._build_recognizer()
 		self._warm_up()
-		print("SpeechToText: initialized.")
+		log.info("SpeechToText: initialized.")
 
 	# -------------------------------------------------------------------------
 	# Setup
@@ -111,7 +115,7 @@ class SpeechToText:
 					f"Run setup.py, or download the model package into {self.MODEL_DIR}."
 				)
 
-		print("SpeechToText: loading Nemotron streaming model...")
+		log.info("SpeechToText: loading Nemotron streaming model...")
 		t0 = time.monotonic()
 		recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
 			tokens=tokens,
@@ -134,7 +138,7 @@ class SpeechToText:
 			rule2_min_trailing_silence=self.RULE2_MIN_TRAILING_SILENCE,
 			rule3_min_utterance_length=self.RULE3_MIN_UTTERANCE_LENGTH,
 		)
-		print(f"SpeechToText: model loaded in {time.monotonic() - t0:.1f}s.")
+		log.info(f"SpeechToText: model loaded in {time.monotonic() - t0:.1f}s.")
 		return recognizer
 
 	def _warm_up(self) -> None:
@@ -150,7 +154,7 @@ class SpeechToText:
 		stream.input_finished()
 		while self._recognizer.is_ready(stream):
 			self._recognizer.decode_stream(stream)
-		print("SpeechToText: warm-up complete.")
+		log.info("SpeechToText: warm-up complete.")
 
 	# -------------------------------------------------------------------------
 	# Public API
@@ -159,13 +163,13 @@ class SpeechToText:
 	def listen_once(self) -> None:
 		if self._listening:
 			if self._listen_thread and not self._listen_thread.is_alive():
-				print("SpeechToText: thread dead but _listening stuck True, resetting.")
+				log.info("SpeechToText: thread dead but _listening stuck True, resetting.")
 				self._listening = False
 			else:
-				print("SpeechToText: already listening, ignoring request.")
+				log.info("SpeechToText: already listening, ignoring request.")
 				return
 
-		print(f"SpeechToText: listen_once called, _listening={self._listening}")
+		log.info(f"SpeechToText: listen_once called, _listening={self._listening}")
 		self._listen_thread = threading.Thread(
 			target=self._capture_and_transcribe, daemon=True
 		)
@@ -173,7 +177,7 @@ class SpeechToText:
 
 	def shutdown(self) -> None:
 		self._listening = False
-		print("SpeechToText: shutdown complete.")
+		log.info("SpeechToText: shutdown complete.")
 
 	# -------------------------------------------------------------------------
 	# Internal
@@ -208,7 +212,7 @@ class SpeechToText:
 				self.MAX_PREROLL_SECONDS, self.ANCHOR_LEAD_SECONDS
 			)
 			if preroll.size:
-				print(f"SpeechToText: priming with "
+				log.info(f"SpeechToText: priming with "
 				      f"{preroll.size / self.SAMPLE_RATE:.2f}s of preroll "
 				      f"(level {int(np.abs(preroll).mean())}).")
 				stream.accept_waveform(
@@ -224,7 +228,7 @@ class SpeechToText:
 					# Timeout rather than block forever, so the pre-speech
 					# deadline is still enforced if capture stalls.
 					if not heard_speech and time.monotonic() > deadline:
-						print("SpeechToText: no speech detected within timeout, giving up.")
+						log.warning("SpeechToText: no speech detected within timeout, giving up.")
 						break
 					continue
 
@@ -238,7 +242,7 @@ class SpeechToText:
 					# Diagnostic only — nothing branches on this. It separates
 					# "no audio is arriving" from "audio is arriving but the
 					# model isn't emitting tokens", which need opposite fixes.
-					print(f"SpeechToText: waiting... {chunks_seen} chunks "
+					log.warning(f"SpeechToText: waiting... {chunks_seen} chunks "
 					      f"({chunks_seen * 0.08:.1f}s), peak level {peak_level:.0f}, "
 					      f"no tokens yet.")
 					peak_level = 0.0
@@ -256,13 +260,13 @@ class SpeechToText:
 				# and rule3 own the rest of the turn.
 				if partial and not heard_speech:
 					heard_speech = True
-					print(f"SpeechToText: speech started ({partial!r}).")
+					log.info(f"SpeechToText: speech started ({partial!r}).")
 
 				if self._recognizer.is_endpoint(stream):
 					cleaned = self._strip_wakeword(partial)
 					if cleaned:
 						text = cleaned
-						print(f"SpeechToText: endpoint reached: {text!r}")
+						log.info(f"SpeechToText: endpoint reached: {text!r}")
 						break
 
 					# Nothing usable in this segment. Two ways to get here:
@@ -272,18 +276,18 @@ class SpeechToText:
 					# hasn't said their command yet, so reset and keep
 					# listening instead of ending the turn on it.
 					if partial:
-						print(f"SpeechToText: discarding wakeword-only segment "
+						log.info(f"SpeechToText: discarding wakeword-only segment "
 						      f"{partial!r}, still listening.")
 					self._recognizer.reset(stream)
 					heard_speech = False
 					deadline = time.monotonic() + self.PRESPEECH_TIMEOUT_S
 
 				if not heard_speech and time.monotonic() > deadline:
-					print("SpeechToText: no speech detected within timeout, giving up.")
+					log.warning("SpeechToText: no speech detected within timeout, giving up.")
 					break
 
 		except Exception as e:
-			print(f"SpeechToText: capture/decode error: {e}")
+			log.exception(f"SpeechToText: capture/decode error: {e}")
 		finally:
 			if q is not None:
 				mic_stream.unsubscribe(q)
@@ -317,6 +321,6 @@ class SpeechToText:
 				count=1, flags=re.IGNORECASE,
 			)
 			if new != text:
-				print(f"SpeechToText: stripped wakeword fragment from {text!r}")
+				log.info(f"SpeechToText: stripped wakeword fragment from {text!r}")
 				return new.strip()
 		return text.strip()

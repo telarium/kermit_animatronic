@@ -11,6 +11,10 @@ from gpio import GPIO
 from program_blue import ProgramBlue
 from gamepad_input import USBGamepadReader, Button
 from keyboard_input import USBKeyboardReader
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 @dataclass
@@ -91,13 +95,13 @@ class Movement:
 
 			self.all.append(movement)
 
-		print(f"Movement: loaded {len(self.all)} movements from {config_path}")
+		log.info(f"Movement: loaded {len(self.all)} movements from {config_path}")
 
 	def set_mirrored(self, val: bool) -> None:
 		if self.b_mirrored == val:
 			return
 		self.b_mirrored = val
-		print(f"Setting mirrored mode: {self.b_mirrored}")
+		log.info(f"Setting mirrored mode: {self.b_mirrored}")
 		for movement in self.all:
 			if movement.key_mirror:
 				key_mirror = movement.key_mirror
@@ -151,7 +155,7 @@ class Movement:
 		if not pin:
 			return
 		if not self.gpio.set_pin_from_address(pin[0], pin[1], val):
-			print(f"Movement: '{movement.key}' {movement.description} "
+			log.warning(f"Movement: '{movement.key}' {movement.description} "
 			      f"GPIO write dropped (0x{pin[0]:02X} pin {pin[1]} = {val})")
 
 	def execute_movement(self, key: str, val: int, b_mute_output: bool = False) -> bool:
@@ -190,7 +194,7 @@ class Movement:
 		try:
 			self.execute_movement(str(key).lower(), val)
 		except Exception as e:
-			print(f"Invalid key: {e}")
+			log.warning(f"Invalid key: {e}")
 
 	def on_program_blue_event(self, channel: int, val: int) -> None:
 		for movement in self.all:

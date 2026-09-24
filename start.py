@@ -18,6 +18,14 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
 	os.environ['XDG_RUNTIME_DIR'] = "/tmp"
 warnings.filterwarnings("ignore")
 
+# Logging comes up before any other project module: several of them log
+# while they import, and those lines matter when diagnosing a boot.
+import logger
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOG_PATH = logger.setup_logging(_BASE_DIR)
+log = logger.get_logger("start")
+
 import usb_monitor
 import audio_setup
 import mic_stream
@@ -43,12 +51,12 @@ for attempt in range(30):
 			pygame.mixer.init()
 			break
 		except Exception as e:
-			print(f"Audio: mixer init failed (attempt {attempt + 1}/30): {e}, retrying...")
+			log.exception(f"Audio: mixer init failed (attempt {attempt + 1}/30): {e}, retrying...")
 	else:
-		print(f"Audio: APE device not found (attempt {attempt + 1}/30), retrying...")
+		log.warning(f"Audio: APE device not found (attempt {attempt + 1}/30), retrying...")
 	time.sleep(2)
 else:
-	print("Audio: APE audio device not found after 30 attempts. Exiting.")
+	log.warning("Audio: APE audio device not found after 30 attempts. Exiting.")
 	sys.exit(1)
 
 respeaker.initialize()
@@ -80,9 +88,7 @@ os.dup2(_old_stderr, 2)
 os.close(_old_stderr)
 _devnull.close()
 
-print("Startup complete.")
-
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+log.info("Imports complete.")
 
 
 def _load_hardware_config(config_path: str) -> dict:
@@ -91,11 +97,13 @@ def _load_hardware_config(config_path: str) -> dict:
 	cfg.read(config_path)
 	json_path = cfg.get("Hardware", "config", fallback="").strip()
 	if not json_path:
-		print("Error: 'config' not specified under [Hardware] in config.cfg. Cannot proceed.", file=sys.stderr)
+		log.critical("Error: 'config' not specified under [Hardware] in config.cfg. Cannot proceed.")
+		logger.flush()
 		sys.exit(1)
 	abs_path = os.path.join(_BASE_DIR, json_path)
 	if not os.path.exists(abs_path):
-		print(f"Error: Hardware config not found at '{abs_path}'. Cannot proceed.", file=sys.stderr)
+		log.critical(f"Error: Hardware config not found at '{abs_path}'. Cannot proceed.")
+		logger.flush()
 		sys.exit(1)
 	with open(abs_path, 'r') as f:
 		hardware = json.load(f)
@@ -119,13 +127,22 @@ class Kermit:
 		# from the template if needed) before anything reads them. The
 		# hardware JSON path comes from the config, so startup cannot
 		# proceed without one.
-		self.config_path, self.shows_dir, _ = utils.resolve_storage(
+		self.config_path, self.shows_dir, using_usb = utils.resolve_storage(
 			_BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
 		)
 		if not self.config_path:
-			print("Error: No usable config.cfg found and none could be created from config_template.cfg. Cannot proceed.", file=sys.stderr)
+			log.critical("Error: No usable config.cfg found and none could be created from config_template.cfg. Cannot proceed.")
+			logger.flush()
 			sys.exit(1)
 		hardware = _load_hardware_config(self.config_path)
+
+		logger.log_boot_banner(
+			_BASE_DIR,
+			character=hardware.get('_path', 'unknown'),
+			config=f"{self.config_path} ({'USB' if using_usb else 'local backup'})",
+			shows=self.shows_dir,
+			log_file=_LOG_PATH,
+		)
 		self._key_map = self._build_key_map(hardware)
 
 		wakeword_model  = os.path.join(_BASE_DIR, hardware['wakeword']['model'])
@@ -203,15 +220,15 @@ class Kermit:
 			_BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
 		)
 		if docs:
-			print(f"Docs: {docs} document(s) on the USB drive are up to date.")
+			log.info(f"Docs: {docs} document(s) on the USB drive are up to date.")
 
 		if not resolved:
 			self.config_path = None
-			print("Warning: No usable config found and none could be created. Continuing with no config.")
+			log.warning("Warning: No usable config found and none could be created. Continuing with no config.")
 			return
 
 		self.config_path = resolved
-		print(f"Config loaded from {resolved} ({'USB' if using_usb else 'local backup'})")
+		log.info(f"Config loaded from {resolved} ({'USB' if using_usb else 'local backup'})")
 		if apply_wifi:
 			self.wifi_management.apply_config(resolved)
 		self.llm.apply_config(resolved)
@@ -266,18 +283,18 @@ class Kermit:
 			utils.write_config_values(self.config_path, updates)
 		except Exception as e:
 			# Most likely a read-only mount (USB stick) or permissions.
-			print(f"Config: save failed: {e}")
+			log.exception(f"Config: save failed: {e}")
 			self.web_server.broadcast('configSaveResult', {'success': False, 'error': str(e)})
 			return
 
-		print(f"Config: saved {sum(len(v) for v in updates.values() if isinstance(v, dict))} value(s) to {self.config_path}")
+		log.info(f"Config: saved {sum(len(v) for v in updates.values() if isinstance(v, dict))} value(s) to {self.config_path}")
 
 		# Mirror the saved config to the other location(s): local dir + USB.
 		sync_errors = utils.sync_config_copies(
 			self.config_path, _BASE_DIR, usb_monitor.USB_MOUNT_POINT, usb_monitor.is_mounted()
 		)
 		for err in sync_errors:
-			print(f"Config: {err}")
+			log.info(f"Config: {err}")
 
 		# Reload: re-applies components and rebroadcasts configLoaded to all
 		# clients. WiFi apply is skipped unless its section actually changed,
@@ -293,7 +310,7 @@ class Kermit:
 
 	def on_usb_detached(self) -> None:
 		"""The drive is gone — fall back to the local backup for everything."""
-		print("Config: USB drive removed, falling back to the local backup.")
+		log.warning("Config: USB drive removed, falling back to the local backup.")
 		self.load_config(apply_wifi=False)
 
 	def on_restore_backup(self) -> None:
@@ -307,7 +324,7 @@ class Kermit:
 			if success:
 				self.load_config(apply_wifi=False)
 			else:
-				print(f"Restore: {message}")
+				log.info(f"Restore: {message}")
 			self.web_server.broadcast('restoreBackupResult',
 				{'success': success, 'message': message})
 		threading.Thread(target=restore, daemon=True).start()
@@ -317,9 +334,9 @@ class Kermit:
 			while self.is_running:
 				time.sleep(0.005)
 		except Exception as e:
-			print(f"Error in main loop: {e}")
+			log.exception(f"Error in main loop: {e}")
 		finally:
-			print("Main loop exiting, calling shutdown...")
+			log.info("Main loop exiting, calling shutdown...")
 			self.shutdown()
 
 	def shutdown(self, *args) -> None:
@@ -346,17 +363,17 @@ class Kermit:
 								ctypes.c_long(thread.ident), ctypes.py_object(SystemExit)
 							)
 						except Exception as e:
-							print(f"Error stopping thread {thread.name}: {e}")
+							log.exception(f"Error stopping thread {thread.name}: {e}")
 
 			pygame.mixer.quit()
 			pygame.display.quit()
 			pygame.quit()
 
-			print("Shutdown complete. Exiting.")
+			log.info("Shutdown complete. Exiting.")
 			sys.exit(0)
 
 		except Exception as e:
-			print(f"Error during shutdown: {e}")
+			log.exception(f"Error during shutdown: {e}")
 			sys.exit(1)
 
 	def on_show_upload(self, files: list) -> dict:
@@ -399,7 +416,7 @@ class Kermit:
 			self.movements.reset_all()
 
 	def on_connect_event(self, client_ip: str) -> None:
-		print(f"Web client connected from IP: {client_ip}")
+		log.info(f"Web client connected from IP: {client_ip}")
 		self.web_server.broadcast('voiceCommandUpdate', {"id": "idle", "value": ""})
 		self.show_player.get_show_list()
 		self.web_server.broadcast('wifiScan', self.wifi_access_points)
@@ -425,7 +442,7 @@ class Kermit:
 			audio_setup.wake_dac_if_needed(pygame)
 			dispatcher.send(signal="animationStart", name="wakeword")
 			if not self.wakeword.wait_until_stopped(timeout=4.0):
-				print("WakeWord: timed out waiting for listen loop to exit, proceeding anyway.")
+				log.warning("WakeWord: timed out waiting for listen loop to exit, proceeding anyway.")
 			self.stt.listen_once()
 		threading.Thread(target=handle, daemon=True).start()
 
@@ -438,7 +455,7 @@ class Kermit:
 			self.led_controller.set_state(LEDController.STATE_OFF)
 			self.movements.reset_all()
 			return
-		print(f"Heard: {text}")
+		log.info(f"Heard: {text}")
 		if not self.voiceCommandHandler.parse(text, followup=self._awaiting_followup):
 			self._awaiting_followup = False
 			self.llm.send(text)
@@ -465,10 +482,10 @@ class Kermit:
 		if match:
 			self._awaiting_followup = True
 			text = text[:match.start()].rstrip()
-			print("Response: {} [?]".format(text))
+			log.info("Response: {} [?]".format(text))
 		else:
 			self._awaiting_followup = False
-			print(f"Response: {text}")
+			log.info(f"Response: {text}")
 		self.tts.speak(text, bForceOffline)
 
 	def on_voice_play(self, file: str) -> None:
@@ -485,7 +502,7 @@ class Kermit:
 			self.wakeword.set_enabled(False)
 		else:
 			mic_stream.set_muted(False)
-			print(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
+			log.info(f"VoicePlayer: playback ended, _awaiting_followup={self._awaiting_followup}")
 			if self._awaiting_followup:
 				# Straight back to listening rather than idle.
 				self.led_controller.set_state(LEDController.STATE_LISTENING)
@@ -493,7 +510,7 @@ class Kermit:
 					dispatcher.send(signal="animationStart", name="wakeword")
 					mic_stream.set_anchor()
 					time.sleep(0.5)
-					print("Kermit: awaiting follow-up response, listening...")
+					log.info("Kermit: awaiting follow-up response, listening...")
 					self.stt.listen_once()
 				threading.Thread(target=delayed_listen, daemon=True).start()
 			else:
@@ -526,7 +543,7 @@ class Kermit:
 				self.web_server.broadcast('wifiConnected', {'ssid': current_ssid, 'signal': match['signal_strength']})
 
 	def on_wifi_connected(self, ssid: str) -> None:
-		print(f"WiFi connected: {ssid}")
+		log.info(f"WiFi connected: {ssid}")
 		signal_strength = 0
 		if self.wifi_access_points:
 			match = next((n for n in self.wifi_access_points if n['ssid'] == ssid), None)

@@ -25,6 +25,10 @@ from typing import List, Optional
 from pydispatch import dispatcher
 
 from midi import parse_file as parse_midi_file
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 MIDI_EXTENSIONS = ('.mid', '.midi')
 
@@ -142,7 +146,7 @@ class _Animation:
 				# One-shot: hold the final pose. Nothing is released here —
 				# the notes stay ON until stop() or the next animation.
 				self._position_ms = self.duration_ms
-				print(f"AnimationController: '{self.name}' finished, holding final pose.")
+				log.info(f"AnimationController: '{self.name}' finished, holding final pose.")
 				break
 
 			time.sleep(self.TICK_S)
@@ -155,7 +159,7 @@ class AnimationController:
 		self._lock = threading.Lock()
 
 		self.set_dispatch_events()
-		print(f"AnimationController: initialized (animations from '{self.animation_dir}').")
+		log.info(f"AnimationController: initialized (animations from '{self.animation_dir}').")
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_animation_start, signal='animationStart', sender=dispatcher.Any)
@@ -175,7 +179,7 @@ class AnimationController:
 
 		events = parse_midi_file(path)
 		if not events:
-			print(f"AnimationController: '{path}' has no usable events, nothing to play.")
+			log.warning(f"AnimationController: '{path}' has no usable events, nothing to play.")
 			return
 
 		duration_ms = float(events[-1][0])
@@ -186,7 +190,7 @@ class AnimationController:
 			# own tail would immediately release the pose we want held.
 			events = self._strip_trailing_note_offs(events)
 			if not events:
-				print(f"AnimationController: '{path}' is only note-offs, nothing to play.")
+				log.info(f"AnimationController: '{path}' is only note-offs, nothing to play.")
 				return
 
 		start_ms = random.uniform(0.0, duration_ms) if (bStartAtRandomTime and duration_ms > 0) else 0.0
@@ -204,7 +208,7 @@ class AnimationController:
 			)
 			self._current = animation
 
-		print(f"AnimationController: playing '{path}' ({len(events)} events, "
+		log.info(f"AnimationController: playing '{path}' ({len(events)} events, "
 		      f"{duration_ms:.0f}ms, loop={bLoop}, start={start_ms:.0f}ms)")
 		animation.play()
 
@@ -216,25 +220,25 @@ class AnimationController:
 			name = self._current.name
 			self._current.stop()
 			self._current = None
-		print(f"AnimationController: stopped '{name}'.")
+		log.info(f"AnimationController: stopped '{name}'.")
 
 	def pause(self) -> None:
 		"""Pause playback, keeping the animation loaded so it can resume."""
 		with self._lock:
 			if self._current is None:
-				print("AnimationController: nothing to pause.")
+				log.info("AnimationController: nothing to pause.")
 				return
 			self._current.pause()
-			print(f"AnimationController: paused '{self._current.name}'.")
+			log.info(f"AnimationController: paused '{self._current.name}'.")
 
 	def resume(self) -> None:
 		"""Resume a paused animation from where it left off."""
 		with self._lock:
 			if self._current is None:
-				print("AnimationController: nothing to resume.")
+				log.info("AnimationController: nothing to resume.")
 				return
 			self._current.resume()
-			print(f"AnimationController: resumed '{self._current.name}'.")
+			log.info(f"AnimationController: resumed '{self._current.name}'.")
 
 	# -------------------------------------------------------------------------
 	# Dispatcher handlers
@@ -261,7 +265,7 @@ class AnimationController:
 		missing, then confirm the file exists."""
 		filename = str(name).strip()
 		if not filename:
-			print("AnimationController: no animation name given.")
+			log.warning("AnimationController: no animation name given.")
 			return None
 
 		if not filename.lower().endswith(MIDI_EXTENSIONS):
@@ -275,7 +279,7 @@ class AnimationController:
 			path = os.path.join(self.animation_dir, filename)
 
 		if not os.path.isfile(path):
-			print(f"AnimationController: animation not found: '{path}'")
+			log.warning(f"AnimationController: animation not found: '{path}'")
 			return None
 		return path
 

@@ -44,6 +44,10 @@ from typing import Optional
 
 import serial
 from pydispatch import dispatcher
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 # ─── Hardware Config ──────────────────────────────────────────────────────────
@@ -116,7 +120,7 @@ class ProgramBlue:
 		)
 		self._reader_thread.start()
 		self._stream_thread.start()
-		print(f"ProgramBlue: reader and stream threads started ({STREAM_HZ} Hz).")
+		log.info(f"ProgramBlue: reader and stream threads started ({STREAM_HZ} Hz).")
 
 	# ─── Connection handling ─────────────────────────────────────────────────
 
@@ -137,21 +141,21 @@ class ProgramBlue:
 			self._ser.dtr = True
 			self._available = True
 			self._reported_missing = False
-			print(f"ProgramBlue: opened {self._port} at {BAUD_RATE} baud, 8N1.")
+			log.info(f"ProgramBlue: opened {self._port} at {BAUD_RATE} baud, 8N1.")
 			return True
 		except (OSError, serial.SerialException) as e:
 			self._ser = None
 			self._available = False
 			if not self._reported_missing:
 				self._reported_missing = True
-				print(f"ProgramBlue: could not open {self._port} — {e}. "
+				log.exception(f"ProgramBlue: could not open {self._port} — {e}. "
 				      f"Retrying every {RECONNECT_INTERVAL:.0f}s.")
 			return False
 
 	def _handle_disconnect(self, why: str) -> None:
 		"""Release every channel and drop the port so the reader can reopen it."""
 		if self._available:
-			print(f"ProgramBlue: disconnected — {why}")
+			log.info(f"ProgramBlue: disconnected — {why}")
 		self._available = False
 		self._streaming = False
 		self._rx_buf.clear()
@@ -213,13 +217,13 @@ class ProgramBlue:
 		self._reader_thread.join(timeout=2)
 		self._stream_thread.join(timeout=2)
 		self._handle_disconnect("shutting down")
-		print(f"ProgramBlue: stopped. frames={self._frame_count} "
+		log.info(f"ProgramBlue: stopped. frames={self._frame_count} "
 		      f"discarded={self._discard_count}")
 
 	# ─── Reader Loop ─────────────────────────────────────────────────────────
 
 	def _reader_loop(self) -> None:
-		print("ProgramBlue: listening for data...")
+		log.info("ProgramBlue: listening for data...")
 		next_retry = 0.0
 		while not self._stop_event.is_set():
 			if not self._available or self._ser is None:
@@ -250,7 +254,7 @@ class ProgramBlue:
 		# No reset_input_buffer() here: ProgramBlue sends its command and the
 		# bytes that follow in one burst, and flushing discards them.
 		self._cmd_counts[cmd] += 1
-		print(f"ProgramBlue: {CMD_NAMES[cmd]} (#{self._cmd_counts[cmd]}) — replying.")
+		log.info(f"ProgramBlue: {CMD_NAMES[cmd]} (#{self._cmd_counts[cmd]}) — replying.")
 
 		if cmd == CMD_IDENTIFY:
 			self._streaming = False
@@ -401,7 +405,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 
 			prev = current
 
-		print(
+		log.info(
 			f"ProgramBlue: v5 layout frames={frame_count}, "
 			f"stride={FRAME_STRIDE}, base={FRAME_BASE}, channels={NUM_SHW_CHANNELS}"
 		)
@@ -441,7 +445,7 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 
 			prev = current
 
-		print(
+		log.info(
 			f"ProgramBlue: v2 layout frames={len(frame_lines)}, "
 			f"channels={NUM_SHW_CHANNELS}"
 		)
@@ -465,8 +469,8 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 			decoded_meta = decode_v5_metadata(meta)
 			events       = parse_v5_frame_table(decoded_meta, fps)
 
-			print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({audio_size} bytes)")
-			print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
+			log.info(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({audio_size} bytes)")
+			log.info(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
 			return AUDIO_TMP, events
 
 		decoded     = bytes((b - 54) & 0xFF for b in data)
@@ -489,12 +493,12 @@ def parse_file(file: str, fps: int = 40) -> tuple[str, list[list]]:
 		fps       = int(fps_match.group(1)) if fps_match else fps
 		events    = parse_v2_frame_table(decoded, fps, body_start, body_end)
 
-		print(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({data_start} bytes)")
-		print(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
+		log.info(f"ProgramBlue: audio extracted to {AUDIO_TMP} ({data_start} bytes)")
+		log.info(f"ProgramBlue: parsed {len(events)} channel events from '{file}'")
 		return AUDIO_TMP, events
 
 	except Exception as e:
-		print(f"ProgramBlue: failed to parse '{file}': {e}")
+		log.exception(f"ProgramBlue: failed to parse '{file}': {e}")
 		return AUDIO_TMP, []
 
 

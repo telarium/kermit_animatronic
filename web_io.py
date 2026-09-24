@@ -7,12 +7,17 @@ from flask_socketio import SocketIO
 from pydispatch import dispatcher
 from typing import Any
 import utils
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Turn off extra log messages
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+# Named distinctly: plain `log` is this module's own logger, above.
+_werkzeug_log = logging.getLogger('werkzeug')
+_werkzeug_log.setLevel(logging.ERROR)
 
 app = Flask(__name__, static_folder='webpage')
 app.config['SECRET_KEY'] = 'Monkey Island is an amusement park.'
@@ -48,7 +53,7 @@ class WebServer:
 			try:
 				socketio.emit(signal_id, data)
 			except Exception as e:
-				print(f"Broadcast error: {e}")
+				log.exception(f"Broadcast error: {e}")
 
 	@app.route('/<path:path>')
 	def static_proxy(path: str) -> Response:
@@ -84,7 +89,7 @@ class WebServer:
 		try:
 			result = handler([(f.filename, f.read()) for f in uploads])
 		except Exception as e:
-			print(f"Upload error: {e}")
+			log.exception(f"Upload error: {e}")
 			return jsonify({'success': False, 'message': str(e)}), 500
 
 		return jsonify(result), 200 if result.get('success') else 400
@@ -164,7 +169,7 @@ class WebServer:
 				if css_file.startswith(prefix):
 					css_file = css_file[len(prefix):]
 				app.config['CSS_FILE'] = css_file
-			print(f"WebServer: html_title='{app.config['HTML_TITLE']}', css_file='{app.config['CSS_FILE']}'")
+			log.info(f"WebServer: html_title='{app.config['HTML_TITLE']}', css_file='{app.config['CSS_FILE']}'")
 
 		# Create a thread for HTTP server only
 		self.threads: list[threading.Thread] = []
@@ -179,13 +184,21 @@ class WebServer:
 
 	def run_http(self) -> None:
 		try:
-			print("Starting HTTP server on port 80...")
-			socketio.run(app, host='0.0.0.0', port=80)
+			log.info("Starting HTTP server on port 80...")
+			# flask-socketio refuses to start Werkzeug without this flag from
+			# 5.3.0 on. The warning is about internet-facing deployments; this
+			# server is a LAN appliance control panel, so the flag is the
+			# right answer rather than dragging in eventlet or gunicorn.
+			try:
+				socketio.run(app, host='0.0.0.0', port=80, allow_unsafe_werkzeug=True)
+			except TypeError:
+				# Older flask-socketio: no such argument, and no such refusal.
+				socketio.run(app, host='0.0.0.0', port=80)
 		except Exception as e:
-			print(f"Error running HTTP server: {e}")
+			log.exception(f"Error running HTTP server: {e}")
 
 	def shutdown(self) -> None:
-		print("Shutting down server...")
+		log.info("Shutting down server...")
 		# Implement shutdown logic if needed.
 
 

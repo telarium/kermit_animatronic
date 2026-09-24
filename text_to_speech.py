@@ -12,6 +12,11 @@ import wave
 import requests
 from pydispatch import dispatcher
 from typing import List, Optional
+import logger
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 
@@ -73,7 +78,7 @@ class TextToSpeech:
 		self._warned_legacy_volume: bool = False
 		self.apply_hardware_config(hardware_path)
 
-		print("Set up TextToSpeech")
+		log.info("Set up TextToSpeech")
 		self.warm_up()
 
 	# -------------------------------------------------------------------------
@@ -85,16 +90,17 @@ class TextToSpeech:
 		try:
 			config.read(path)
 		except configparser.Error as e:
-			print(f"TextToSpeech: failed to parse config at '{path}': {e}")
+			log.exception(f"TextToSpeech: failed to parse config at '{path}': {e}")
 			return
 
 		self.elevenlabs_key      = config.get("TextToSpeech", "ElevenLabsKey",     fallback="").strip()
+		logger.register_secret(self.elevenlabs_key)
 		self.elevenlabs_voice_id = config.get("TextToSpeech", "ElevenLabsVoiceID", fallback="").strip()
 		self.elevenlabs_stability             = config.getfloat("TextToSpeech", "ElevenLabsStability",              fallback=0.35)
 		self.elevenlabs_similarity_boost      = config.getfloat("TextToSpeech", "ElevenLabsSimularityBoost",        fallback=0.75)
 		self.elevenlabs_style                 = config.getfloat("TextToSpeech", "ElevenLabsStyle",                  fallback=0.3)
 		self.elevenlabs_use_high_quality_slow_model = config.getboolean("TextToSpeech", "ElevenLabsUseHighQualitySlowModel", fallback=False)
-		print(f"TextToSpeech: voice settings applied (stability={self.elevenlabs_stability}, similarity_boost={self.elevenlabs_similarity_boost}, style={self.elevenlabs_style}, high_quality={self.elevenlabs_use_high_quality_slow_model})")
+		log.info(f"TextToSpeech: voice settings applied (stability={self.elevenlabs_stability}, similarity_boost={self.elevenlabs_similarity_boost}, style={self.elevenlabs_style}, high_quality={self.elevenlabs_use_high_quality_slow_model})")
 
 	def apply_hardware_config(self, hardware_path: Optional[str]) -> None:
 		"""Read the optional "piper" block from the character JSON:
@@ -107,12 +113,12 @@ class TextToSpeech:
 			with open(hardware_path, 'r') as f:
 				config = json.load(f)
 		except (OSError, ValueError) as e:
-			print(f"TextToSpeech: could not read character config '{hardware_path}': {e}")
+			log.exception(f"TextToSpeech: could not read character config '{hardware_path}': {e}")
 			return
 
 		piper = config.get('piper', {})
 		if not isinstance(piper, dict):
-			print("TextToSpeech: 'piper' block is not an object, ignoring.")
+			log.warning("TextToSpeech: 'piper' block is not an object, ignoring.")
 			return
 
 		directory = str(piper.get('directory', '')).strip()
@@ -124,17 +130,17 @@ class TextToSpeech:
 		self.piper_volume = self._positive_float(piper, 'volume', self.piper_volume, maximum=1.0)
 
 		if self.piper_dir:
-			print(f"TextToSpeech: offline voice dir '{self.piper_dir}' "
+			log.info(f"TextToSpeech: offline voice dir '{self.piper_dir}' "
 			      f"(speed={self.piper_speed}, volume={self.piper_volume})")
 
 	@staticmethod
 	def _positive_float(block: dict, name: str, default: float, maximum: Optional[float] = None) -> float:
 		raw = block.get(name, default)
 		if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw <= 0:
-			print(f"TextToSpeech: piper.{name} must be a positive number, ignoring '{raw}'")
+			log.warning(f"TextToSpeech: piper.{name} must be a positive number, ignoring '{raw}'")
 			return default
 		if maximum is not None and raw > maximum:
-			print(f"TextToSpeech: piper.{name} clamped to {maximum} (was {raw})")
+			log.info(f"TextToSpeech: piper.{name} clamped to {maximum} (was {raw})")
 			return maximum
 		return float(raw)
 
@@ -173,9 +179,9 @@ class TextToSpeech:
 			# Synthesized and thrown away — never dispatched for playback.
 			with wave.open(tmp_path, "wb") as wav_file:
 				self._synthesize_piper(voice, "Hi ho.", wav_file)
-			print(f"TextToSpeech: offline voice warm-up complete in {time.monotonic() - t0:.1f}s.")
+			log.info(f"TextToSpeech: offline voice warm-up complete in {time.monotonic() - t0:.1f}s.")
 		except Exception as e:
-			print(f"TextToSpeech: offline voice warm-up failed: {e}")
+			log.exception(f"TextToSpeech: offline voice warm-up failed: {e}")
 		finally:
 			if tmp_path:
 				try:
@@ -187,28 +193,28 @@ class TextToSpeech:
 		raw = text
 		text = sanitize_for_speech(text)
 		if text != raw:
-			print(f"TextToSpeech: sanitized -> {text!r}")
+			log.info(f"TextToSpeech: sanitized -> {text!r}")
 		if not text:
-			print("TextToSpeech: nothing speakable left after sanitizing.")
+			log.info("TextToSpeech: nothing speakable left after sanitizing.")
 			return
 		started = time.monotonic()
 		if not bForceOffline:
 			if self._speak_elevenlabs(text):
-				print(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
+				log.info(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
 				return
-			print("TextToSpeech: falling back to the offline voice.")
+			log.warning("TextToSpeech: falling back to the offline voice.")
 		if not self._speak_piper(text):
-			print("TextToSpeech: no voice available — nothing spoken.")
+			log.warning("TextToSpeech: no voice available — nothing spoken.")
 			return
-		print(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
+		log.info(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
 
 	def _speak_elevenlabs(self, text: str) -> bool:
 		"""Returns True only if audio was produced and dispatched."""
 		if not self.elevenlabs_key:
-			print("TextToSpeech: no ElevenLabs API key set.")
+			log.warning("TextToSpeech: no ElevenLabs API key set.")
 			return False
 		if not self.elevenlabs_voice_id:
-			print("TextToSpeech: no ElevenLabs voice ID set.")
+			log.warning("TextToSpeech: no ElevenLabs voice ID set.")
 			return False
 
 		try:
@@ -240,27 +246,27 @@ class TextToSpeech:
 
 			dispatcher.send(signal="playVoiceFile", file=tmp.name)
 
-			print(f"TextToSpeech: audio saved to {tmp.name}")
+			log.info(f"TextToSpeech: audio saved to {tmp.name}")
 			return True
 
 		except requests.HTTPError as e:
-			print(f"TextToSpeech: HTTP error from ElevenLabs: {e}")
+			log.exception(f"TextToSpeech: HTTP error from ElevenLabs: {e}")
 		except Exception as e:
-			print(f"TextToSpeech: request failed: {e}")
+			log.exception(f"TextToSpeech: request failed: {e}")
 		return False
 
 	def _find_piper_files(self) -> Optional[tuple]:
 		"""Locate (model.onnx, voice.json) in the configured directory."""
 		if not self.piper_dir:
-			print("TextToSpeech: no 'piper' directory in the character config.")
+			log.warning("TextToSpeech: no 'piper' directory in the character config.")
 			return None
 		if not os.path.isdir(self.piper_dir):
-			print(f"TextToSpeech: Piper directory '{self.piper_dir}' not found.")
+			log.warning(f"TextToSpeech: Piper directory '{self.piper_dir}' not found.")
 			return None
 
 		models = sorted(glob.glob(os.path.join(self.piper_dir, "*.onnx")))
 		if not models:
-			print(f"TextToSpeech: no .onnx voice in '{self.piper_dir}'.")
+			log.warning(f"TextToSpeech: no .onnx voice in '{self.piper_dir}'.")
 			return None
 		model = models[0]
 
@@ -269,7 +275,7 @@ class TextToSpeech:
 		if not os.path.isfile(config):
 			candidates = sorted(glob.glob(os.path.join(self.piper_dir, "*.json")))
 			if not candidates:
-				print(f"TextToSpeech: no voice .json alongside '{model}'.")
+				log.warning(f"TextToSpeech: no voice .json alongside '{model}'.")
 				return None
 			config = candidates[0]
 
@@ -292,16 +298,16 @@ class TextToSpeech:
 				except ImportError:
 					from piper.voice import PiperVoice
 			except ImportError as e:
-				print(f"TextToSpeech: piper-tts not installed ({e}). Run setup.py.")
+				log.error(f"TextToSpeech: piper-tts not installed ({e}). Run setup.py.")
 				return None
 
 			try:
 				self._piper_voice = PiperVoice.load(model, config_path=config)
 			except Exception as e:
-				print(f"TextToSpeech: failed to load Piper voice '{model}': {e}")
+				log.exception(f"TextToSpeech: failed to load Piper voice '{model}': {e}")
 				return None
 
-			print(f"TextToSpeech: loaded offline voice {os.path.basename(model)}")
+			log.info(f"TextToSpeech: loaded offline voice {os.path.basename(model)}")
 			return self._piper_voice
 
 	# Silence inserted at each "..." on the offline path. One wav rather than a
@@ -352,7 +358,7 @@ class TextToSpeech:
 			if index:
 				wav_file.writeframes(silence)
 			wav_file.writeframes(segment)
-		print(f"TextToSpeech: {len(segments)} chunks joined with "
+		log.info(f"TextToSpeech: {len(segments)} chunks joined with "
 		      f"{self.PIPER_ELLIPSIS_PAUSE_S:.2f}s pauses.")
 
 	def _synthesize_piper(self, voice, text: str, wav_file) -> None:
@@ -377,7 +383,7 @@ class TextToSpeech:
 		# Legacy piper-tts has no volume control.
 		if self.piper_volume != 1.0 and not self._warned_legacy_volume:
 			self._warned_legacy_volume = True
-			print("TextToSpeech: installed piper-tts is too old for piper.volume — ignoring it.")
+			log.warning("TextToSpeech: installed piper-tts is too old for piper.volume — ignoring it.")
 		voice.synthesize(text, wav_file, length_scale=self.piper_speed)
 
 	def _speak_piper(self, text: str) -> bool:
@@ -396,8 +402,8 @@ class TextToSpeech:
 
 			dispatcher.send(signal="playVoiceFile", file=tmp.name)
 
-			print(f"TextToSpeech: offline audio saved to {tmp.name}")
+			log.info(f"TextToSpeech: offline audio saved to {tmp.name}")
 			return True
 		except Exception as e:
-			print(f"TextToSpeech: Piper synthesis failed: {e}")
+			log.exception(f"TextToSpeech: Piper synthesis failed: {e}")
 			return False

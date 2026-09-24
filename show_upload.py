@@ -28,6 +28,10 @@ from typing import List, Optional, Tuple
 
 import usb_monitor
 import utils
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 AUDIO_EXTENSIONS = ('.mp3', '.wav', '.ogg')
 MIDI_EXTENSIONS  = ('.mid', '.midi')
@@ -53,7 +57,7 @@ def _safe_name(name: str) -> Optional[str]:
 
 
 def _failed(message: str) -> dict:
-	print(f"ShowUpload: {message}")
+	log.warning(f"ShowUpload: {message}")
 	return {"success": False, "message": message}
 
 
@@ -174,9 +178,9 @@ class ShowUploader:
 		result = {"success": True, "show": show_name, "kind": kind, "message": message}
 		if errors:
 			result["warning"] = "; ".join(errors)
-			print(f"ShowUpload: {message} ({result['warning']})")
+			log.info(f"ShowUpload: {message} ({result['warning']})")
 		else:
-			print(f"ShowUpload: {message}")
+			log.info(f"ShowUpload: {message}")
 		return result
 
 	def _write_destinations(self, total_bytes: int) -> List[Tuple[str, bool, str]]:
@@ -224,7 +228,7 @@ class ShowUploader:
 			except OSError as e:
 				return _failed(f"Could not stage '{show_name}' for conversion: {e}")
 
-			print(f"ShowUpload: converting '{show_name}' to ProgramBlue...")
+			log.info(f"ShowUpload: converting '{show_name}' to ProgramBlue...")
 			try:
 				result = subprocess.run(
 					[sys.executable, converter, work_midi, self._hardware_path],
@@ -252,7 +256,7 @@ class ShowUploader:
 		# Only now that the .shw is safely on disk.
 		removed = self._remove_midi_set(destinations, show_name)
 		written["message"] = f"Converted '{show_name}' to a ProgramBlue show."
-		print(f"ShowUpload: {written['message']} Removed {removed} MIDI/audio file(s).")
+		log.info(f"ShowUpload: {written['message']} Removed {removed} MIDI/audio file(s).")
 		return written
 
 	def _find_midi_set(self, destinations: List[str], show_name: str) -> Optional[Tuple[str, str]]:
@@ -275,5 +279,5 @@ class ShowUploader:
 					os.remove(path)
 					removed += 1
 				except OSError as e:
-					print(f"ShowUpload: could not remove '{path}': {e}")
+					log.exception(f"ShowUpload: could not remove '{path}': {e}")
 		return removed

@@ -15,6 +15,10 @@ import glob
 import os
 import re
 import configparser
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 CONFIG_FILENAME = "config.cfg"
@@ -93,7 +97,7 @@ def find_usb_config(usb_mount_point: str, usb_config_path: str = "") -> str:
 		valid, err = validate_config(path)
 		if valid:
 			return path
-		print(f"Config: USB config '{path}' is invalid ({err}); ignoring it.")
+		log.warning(f"Config: USB config '{path}' is invalid ({err}); ignoring it.")
 	return None
 
 
@@ -107,23 +111,23 @@ def ensure_local_config(base_dir: str) -> str:
 		valid, err = validate_config(local_cfg)
 		if valid:
 			return local_cfg
-		print(f"Config: local config '{local_cfg}' is invalid ({err}).")
+		log.warning(f"Config: local config '{local_cfg}' is invalid ({err}).")
 		# Preserve the broken file for inspection before the template replaces it.
 		try:
 			os.replace(local_cfg, local_cfg + ".invalid")
-			print(f"Config: moved invalid config to {local_cfg}.invalid")
+			log.warning(f"Config: moved invalid config to {local_cfg}.invalid")
 		except OSError as e:
-			print(f"Config: could not move invalid config aside: {e}")
+			log.exception(f"Config: could not move invalid config aside: {e}")
 
 	if not os.path.exists(template):
-		print(f"Config: template '{template}' not found; cannot create a config.")
+		log.error(f"Config: template '{template}' not found; cannot create a config.")
 		return None
 	try:
 		copy_file_if_different(template, local_cfg)
 	except OSError as e:
-		print(f"Config: could not create local config from template: {e}")
+		log.exception(f"Config: could not create local config from template: {e}")
 		return None
-	print(f"Config: created {local_cfg} from template.")
+	log.info(f"Config: created {local_cfg} from template.")
 	return local_cfg
 
 
@@ -153,7 +157,7 @@ def copy_new_files(src_dir: str, dst_dir: str, max_bytes: int = None) -> int:
 	try:
 		os.makedirs(dst_dir, exist_ok=True)
 	except OSError as e:
-		print(f"Shows: could not create '{dst_dir}': {e}")
+		log.exception(f"Shows: could not create '{dst_dir}': {e}")
 		return 0
 
 	used = directory_size(dst_dir) if max_bytes is not None else 0
@@ -170,13 +174,13 @@ def copy_new_files(src_dir: str, dst_dir: str, max_bytes: int = None) -> int:
 		except OSError:
 			continue
 		if max_bytes is not None and used + size > max_bytes:
-			print(f"Shows: skipping '{name}' — would take the backup past "
+			log.warning(f"Shows: skipping '{name}' — would take the backup past "
 			      f"{max_bytes // (1024 * 1024)}MB.")
 			continue
 		try:
 			copy_file_if_different(src, dst)
 		except OSError as e:
-			print(f"Shows: could not copy '{name}': {e}")
+			log.exception(f"Shows: could not copy '{name}': {e}")
 			continue
 		used += size
 		copied += 1
@@ -199,7 +203,7 @@ def copy_documents(src_dir: str, dst_dir: str) -> int:
 		try:
 			copy_file_if_different(src, os.path.join(dst_dir, name))
 		except OSError as e:
-			print(f"Restore: could not copy '{name}': {e}")
+			log.exception(f"Restore: could not copy '{name}': {e}")
 			continue
 		copied += 1
 	return copied
@@ -231,7 +235,7 @@ def resolve_storage(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_
 	try:
 		os.makedirs(local_shows, exist_ok=True)
 	except OSError as e:
-		print(f"Shows: could not create '{local_shows}': {e}")
+		log.exception(f"Shows: could not create '{local_shows}': {e}")
 
 	usb_cfg = find_usb_config(usb_mount_point, usb_config_path) if usb_mounted else None
 	if not usb_cfg:
@@ -240,14 +244,14 @@ def resolve_storage(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_
 	# USB is the source of truth — back it up locally.
 	try:
 		if copy_file_if_different(usb_cfg, os.path.join(base_dir, CONFIG_FILENAME)):
-			print(f"Config: backed up USB config to {base_dir}")
+			log.info(f"Config: backed up USB config to {base_dir}")
 	except OSError as e:
-		print(f"Config: could not back up USB config locally: {e}")
+		log.exception(f"Config: could not back up USB config locally: {e}")
 
 	usb_shows = os.path.join(usb_mount_point, SHOWS_DIRNAME)
 	copied = copy_new_files(usb_shows, local_shows, MAX_LOCAL_SHOWS_BYTES)
 	if copied:
-		print(f"Shows: backed up {copied} show file(s) from the USB drive.")
+		log.info(f"Shows: backed up {copied} show file(s) from the USB drive.")
 
 	return usb_cfg, usb_shows, True
 
@@ -276,7 +280,7 @@ def restore_backup_to_usb(base_dir: str, usb_mount_point: str, usb_mounted: bool
 
 	message = (f"Restored the config, {shows} show file(s) and "
 	           f"{documents} document(s) to the USB drive.")
-	print(f"Restore: {message}")
+	log.info(f"Restore: {message}")
 	return True, message
 
 
@@ -319,7 +323,7 @@ def _parse_config_sections(path: str, excluded_sections: tuple = ()) -> dict:
 	try:
 		cfg.read(path)
 	except configparser.Error as e:
-		print(f"Config: failed to parse '{path}': {e}")
+		log.exception(f"Config: failed to parse '{path}': {e}")
 		return {}
 
 	data: dict = {}

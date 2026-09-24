@@ -2,6 +2,10 @@ import time
 from typing import Optional
 
 import smbus
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 # MCP23008 Register Addresses
 IODIR   = 0x00   # GPIO direction register
@@ -29,10 +33,10 @@ class MCP23008:
 			self.bus.write_byte_data(self.address, IODIR, 0x00)  # All pins as outputs
 			self.bus.write_byte_data(self.address, OLAT, 0x00)   # All pins LOW
 			self.available = True
-			print(f"GPIO: MCP23008 ready at 0x{self.address:02X}")
+			log.info(f"GPIO: MCP23008 ready at 0x{self.address:02X}")
 		except Exception as e:
 			self.available = False
-			print(f"Warning! MCP23008 unavailable at I2C address "
+			log.warning(f"Warning! MCP23008 unavailable at I2C address "
 			      f"0x{self.address:02X} — {type(e).__name__}: {e}")
 
 	def _report_error(self, pin: int, op: str, e: Exception) -> None:
@@ -42,7 +46,7 @@ class MCP23008:
 		if now - self._last_error_time.get(key, 0.0) < ERROR_REPORT_INTERVAL:
 			return
 		self._last_error_time[key] = now
-		print(f"GPIO: 0x{self.address:02X} pin {pin} {op} FAILED "
+		log.error(f"GPIO: 0x{self.address:02X} pin {pin} {op} FAILED "
 		      f"({self._error_counts[key]}x) — {type(e).__name__}: {e}")
 
 	def set_pin(self, pin: int, value: int) -> bool:
@@ -87,7 +91,7 @@ class GPIO:
 			# Initialize MCP23008 devices and store them in a list
 			self.mcp_devices = [MCP23008(bus, addr) for addr in i2c_addresses]
 		except Exception as e:
-			print(f"MCP23008 GPIO expanders not detected! — {type(e).__name__}: {e}")
+			log.error(f"MCP23008 GPIO expanders not detected! — {type(e).__name__}: {e}")
 			self.mcp_devices = None
 
 	# Find MCP23008 device by I2C address
@@ -100,6 +104,6 @@ class GPIO:
 			if mcp.address == i2c_address:
 				return mcp.set_pin(pin, value)
 
-		print(f"GPIO: no expander configured at 0x{i2c_address:02X} "
+		log.warning(f"GPIO: no expander configured at 0x{i2c_address:02X} "
 		      f"(pin {pin} = {value} dropped)")
 		return False

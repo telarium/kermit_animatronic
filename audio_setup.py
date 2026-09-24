@@ -30,6 +30,10 @@ import threading
 import time
 import wave
 from typing import Optional
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 # ALSA control name for the AHUB crossbar mux feeding the header I2S port.
 # On the Orin Nano 40-pin header, the enabled port is I2S2 (see jetson-io).
@@ -108,7 +112,7 @@ def wake_dac_if_needed(pygame_instance) -> None:
 				# otherwise the two overlap and the wake is wasted.
 				time.sleep(_WAKE_SECONDS + 0.01)
 			except Exception as e:
-				print(f"Audio: DAC wake failed (continuing anyway): {e}")
+				log.exception(f"Audio: DAC wake failed (continuing anyway): {e}")
 		_last_play_time = time.monotonic()
 
 
@@ -137,11 +141,11 @@ def find_ape_audio_card() -> Optional[str]:
 		for line in result.stdout.splitlines():
 			# e.g. "card 1: APE [NVIDIA Jetson Orin Nano APE], device 0: ..."
 			if "APE" in line and line.strip().lower().startswith("card"):
-				print(f"Audio: found APE card -> {_APE_PLAYBACK_DEVICE}")
+				log.info(f"Audio: found APE card -> {_APE_PLAYBACK_DEVICE}")
 				return _APE_PLAYBACK_DEVICE
 	except Exception as e:
-		print(f"Audio: error scanning for APE card: {e}")
-	print("Audio: APE card not found (is the I2S overlay applied?).")
+		log.exception(f"Audio: error scanning for APE card: {e}")
+	log.warning("Audio: APE card not found (is the I2S overlay applied?).")
 	return None
 
 
@@ -160,17 +164,17 @@ def setup_i2s_routing() -> bool:
 			check=True, capture_output=True, text=True,
 		)
 	except FileNotFoundError:
-		print("Audio: 'amixer' not found — is alsa-utils installed?")
+		log.warning("Audio: 'amixer' not found — is alsa-utils installed?")
 		return False
 	except subprocess.CalledProcessError as e:
-		print(f"Audio: failed to set '{_I2S_MUX_CONTROL}': {e.stderr.strip()}")
+		log.exception(f"Audio: failed to set '{_I2S_MUX_CONTROL}': {e.stderr.strip()}")
 		return False
 
 	if verify_i2s_routing():
-		print(f"Audio: routed {_I2S_MUX_CONTROL} <- {_I2S_MUX_SOURCE}")
+		log.info(f"Audio: routed {_I2S_MUX_CONTROL} <- {_I2S_MUX_SOURCE}")
 		return True
 
-	print(f"Audio: '{_I2S_MUX_CONTROL}' did not read back as {_I2S_MUX_SOURCE}.")
+	log.warning(f"Audio: '{_I2S_MUX_CONTROL}' did not read back as {_I2S_MUX_SOURCE}.")
 	return False
 
 
@@ -188,7 +192,7 @@ def verify_i2s_routing() -> bool:
 			capture_output=True, text=True,
 		)
 	except Exception as e:
-		print(f"Audio: error reading back routing: {e}")
+		log.exception(f"Audio: error reading back routing: {e}")
 		return False
 
 	out = result.stdout

@@ -8,6 +8,11 @@ import fcntl
 import struct
 from typing import Optional, List, Dict
 from pydispatch import dispatcher
+import logger
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 WIFI_INTERFACE = "wlP1p1s0"
 
@@ -19,7 +24,7 @@ class WifiManagement:
 
 		self._start_disconnect_monitor()
 
-		print("WifiManagement: initialized.")
+		log.info("WifiManagement: initialized.")
 
 	# -------------------------------------------------------------------------
 	# Public API
@@ -30,20 +35,21 @@ class WifiManagement:
 		try:
 			config.read(path)
 		except configparser.Error as e:
-			print(f"WifiManagement: failed to parse config at '{path}': {e}")
+			log.exception(f"WifiManagement: failed to parse config at '{path}': {e}")
 			return
 
 		preferred_ssid = config.get("WiFi", "WifiName", fallback="").strip()
 		preferred_password = config.get("WiFi", "Password", fallback="").strip() or None
+		logger.register_secret(preferred_password or "")
 
 		if not preferred_ssid:
-			print("WifiManagement: apply_config — no WifiName set, doing nothing.")
+			log.warning("WifiManagement: apply_config — no WifiName set, doing nothing.")
 			return
 
 		if preferred_password:
-			print(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' with password...")
+			log.info(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' with password...")
 		else:
-			print(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' (no password)...")
+			log.warning(f"WifiManagement: apply_config — connecting to '{preferred_ssid}' (no password)...")
 
 		threading.Thread(
 			target=self._startup_connect,
@@ -98,7 +104,7 @@ class WifiManagement:
 			if ip:
 				return ip
 
-		print("WifiManagement: get_ip — no active network interface found.")
+		log.warning("WifiManagement: get_ip — no active network interface found.")
 		return "0"
 
 	def get_wifi_access_points(self) -> List[Dict]:
@@ -120,7 +126,7 @@ class WifiManagement:
 				if len(parts) == 3 and "wireless" in parts[1].lower() and "activated" in parts[2].lower():
 					return parts[0].strip() or None
 		except Exception as e:
-			print(f"WifiManagement: error getting current SSID: {e}")
+			log.exception(f"WifiManagement: error getting current SSID: {e}")
 		return None
 
 	def get_signal_strength(self) -> int:
@@ -140,7 +146,7 @@ class WifiManagement:
 					percent = max(0, min(100, 2 * (dbm + 100)))
 					return percent
 		except Exception as e:
-			print(f"WifiManagement: error getting signal strength: {e}")
+			log.exception(f"WifiManagement: error getting signal strength: {e}")
 		return 0
 
 	def connect(self, ssid_query: str, password: Optional[str] = None) -> None:
@@ -149,6 +155,7 @@ class WifiManagement:
 		- If new network and password provided: connects and saves credentials via NM.
 		- If new network and no password: dispatches 'wifiPasswordRequired'.
 		Dispatches 'wifiConnected' on success, 'wifiWrongPassword' on auth failure."""
+		logger.register_secret(password or "")
 		threading.Thread(
 			target=self._do_connect,
 			args=(ssid_query, password),
@@ -160,9 +167,9 @@ class WifiManagement:
 	# -------------------------------------------------------------------------
 
 	def _do_scan(self) -> None:
-		print("WifiManagement: _do_scan started")
+		log.info("WifiManagement: _do_scan started")
 		try:
-			print("WifiManagement: scanning...")
+			log.info("WifiManagement: scanning...")
 			result = subprocess.run(
 				["nmcli", "--terse", "-f", "SSID,SIGNAL,IN-USE", "dev", "wifi", "list", "--rescan", "yes"],
 				capture_output=True, text=True, timeout=30
@@ -185,10 +192,10 @@ class WifiManagement:
 
 			networks.sort(key=lambda x: x["signal_strength"], reverse=True)
 			self._cached_networks = networks
-			print(f"WifiManagement: scan complete, {len(networks)} networks found.")
+			log.info(f"WifiManagement: scan complete, {len(networks)} networks found.")
 			dispatcher.send(signal="wifiScanComplete", networks=networks)
 		except Exception as e:
-			print(f"WifiManagement: scan error: {e}")
+			log.exception(f"WifiManagement: scan error: {e}")
 			dispatcher.send(signal="wifiScanComplete", networks=[])
 
 	# -------------------------------------------------------------------------
@@ -199,17 +206,17 @@ class WifiManagement:
 		# Resolve fuzzy match against currently visible networks
 		target_ssid = self._fuzzy_match_ssid(ssid_query)
 		if not target_ssid:
-			print(f"WifiManagement: no match found for '{ssid_query}'")
+			log.warning(f"WifiManagement: no match found for '{ssid_query}'")
 			return
 
 		# Already connected to this network — do nothing
 		current = self.get_current_ssid()
 		if current and current.lower() == target_ssid.lower():
-			print(f"WifiManagement: already connected to '{current}', skipping.")
+			log.info(f"WifiManagement: already connected to '{current}', skipping.")
 			dispatcher.send(signal="wifiConnected", ssid=current)
 			return
 
-		print(f"WifiManagement: connecting to '{target_ssid}'...")
+		log.info(f"WifiManagement: connecting to '{target_ssid}'...")
 
 		# Check if NetworkManager already has a saved profile for this SSID
 		known_profiles = self._get_known_ssids()
@@ -222,19 +229,19 @@ class WifiManagement:
 			# New network with a password — connect and let NM save it
 			success, error = self._nmcli_connect_new(target_ssid, password)
 		else:
-			print(f"WifiManagement: password required for new network '{target_ssid}'")
+			log.info(f"WifiManagement: password required for new network '{target_ssid}'")
 			dispatcher.send(signal="wifiPasswordRequired", ssid=target_ssid)
 			return
 
 		if success:
-			print(f"WifiManagement: connected to '{target_ssid}'.")
+			log.info(f"WifiManagement: connected to '{target_ssid}'.")
 			dispatcher.send(signal="wifiConnected", ssid=target_ssid)
 		else:
 			if error and ("secrets" in error.lower() or "password" in error.lower() or "802-11" in error.lower() or "authentication" in error.lower()):
-				print(f"WifiManagement: wrong password for '{target_ssid}'.")
+				log.info(f"WifiManagement: wrong password for '{target_ssid}'.")
 				dispatcher.send(signal="playVoiceFile", file="wifi_bad_password.ogg")
 			else:
-				print(f"WifiManagement: connection failed for '{target_ssid}': {error}")
+				log.error(f"WifiManagement: connection failed for '{target_ssid}': {error}")
 				dispatcher.send(signal="playVoiceFile", file="wifi_connection_failed.ogg")
 
 	def _nmcli_up_by_ssid(self, ssid: str):
@@ -302,7 +309,7 @@ class WifiManagement:
 				stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
 				text=True
 			)
-			print("WifiManagement: disconnect monitor started.")
+			log.info("WifiManagement: disconnect monitor started.")
 			while not self._stop_monitor.is_set():
 				line = proc.stdout.readline()
 				if not line:
@@ -310,11 +317,11 @@ class WifiManagement:
 				line_lower = line.lower()
 				# Only care about our wifi interface going disconnected
 				if WIFI_INTERFACE in line_lower and "disconnected" in line_lower:
-					print(f"WifiManagement: disconnected ({line.strip()})")
+					log.info(f"WifiManagement: disconnected ({line.strip()})")
 					dispatcher.send(signal="wifiDisconnected")
 			proc.terminate()
 		except Exception as e:
-			print(f"WifiManagement: monitor error: {e}")
+			log.exception(f"WifiManagement: monitor error: {e}")
 
 	# -------------------------------------------------------------------------
 	# Internal: helpers
@@ -334,7 +341,7 @@ class WifiManagement:
 					ssids.append(parts[0].strip())
 			return ssids
 		except Exception as e:
-			print(f"WifiManagement: error fetching known SSIDs: {e}")
+			log.exception(f"WifiManagement: error fetching known SSIDs: {e}")
 			return []
 
 	def _get_visible_ssids(self) -> List[str]:
@@ -349,7 +356,7 @@ class WifiManagement:
 				if line.strip()
 			]
 		except Exception as e:
-			print(f"WifiManagement: error listing visible SSIDs: {e}")
+			log.exception(f"WifiManagement: error listing visible SSIDs: {e}")
 			return []
 
 	def _fuzzy_match_ssid(self, query: str) -> Optional[str]:
@@ -382,7 +389,7 @@ class WifiManagement:
 		"""
 		current = self.get_current_ssid()
 		if current:
-			print(f"WifiManagement: already connected to '{current}', skipping.")
+			log.info(f"WifiManagement: already connected to '{current}', skipping.")
 			dispatcher.send(signal="wifiConnected", ssid=current)
 			return
 
@@ -393,7 +400,7 @@ class WifiManagement:
 		# 1. Exact match of config SSID in visible networks (case-insensitive)
 		if ssid.lower() in visible_lower:
 			target = visible_lower[ssid.lower()]
-			print(f"WifiManagement: found exact match '{target}', connecting...")
+			log.info(f"WifiManagement: found exact match '{target}', connecting...")
 			if target in known:
 				success, _ = self._nmcli_up_by_ssid(target)
 			elif password:
@@ -401,25 +408,25 @@ class WifiManagement:
 			else:
 				success = False
 			if success:
-				print(f"WifiManagement: connected to preferred network '{target}'.")
+				log.info(f"WifiManagement: connected to preferred network '{target}'.")
 				dispatcher.send(signal="wifiConnected", ssid=target)
 				return
-			print(f"WifiManagement: exact match '{target}' failed, trying fallbacks...")
+			log.error(f"WifiManagement: exact match '{target}' failed, trying fallbacks...")
 
 		# 2. Known NM profiles that are currently visible
 		for known_ssid in known:
 			if known_ssid.lower() in visible_lower:
 				target = visible_lower[known_ssid.lower()]
-				print(f"WifiManagement: trying known network '{target}'...")
+				log.info(f"WifiManagement: trying known network '{target}'...")
 				success, _ = self._nmcli_up_by_ssid(target)
 				if success:
-					print(f"WifiManagement: connected to known network '{target}'.")
+					log.info(f"WifiManagement: connected to known network '{target}'.")
 					dispatcher.send(signal="wifiConnected", ssid=target)
 					return
 				time.sleep(1)
 
 		# 3. Fuzzy match of config SSID against visible networks
-		print(f"WifiManagement: no known networks visible, trying fuzzy match for '{ssid}'...")
+		log.warning(f"WifiManagement: no known networks visible, trying fuzzy match for '{ssid}'...")
 		target = self._fuzzy_match_ssid(ssid)
 		if target:
 			if target in known:
@@ -429,12 +436,12 @@ class WifiManagement:
 			else:
 				success = False
 			if success:
-				print(f"WifiManagement: connected via fuzzy match to '{target}'.")
+				log.info(f"WifiManagement: connected via fuzzy match to '{target}'.")
 				dispatcher.send(signal="wifiConnected", ssid=target)
 				return
 
 		dispatcher.send(signal="playVoiceFile", file="wifi_not_found.ogg")
-		print("WifiManagement: all connection attempts failed.")
+		log.error("WifiManagement: all connection attempts failed.")
 
 
 # Example usage

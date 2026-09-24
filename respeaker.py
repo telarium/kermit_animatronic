@@ -20,6 +20,10 @@ import os
 import threading
 import time
 from typing import Optional
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -103,7 +107,7 @@ class ReSpeaker:
 		self._device = None
 		self._warned_missing = False
 		if self._xvf is None:
-			print("ReSpeaker: xvf_host not importable — device control disabled.")
+			log.warning("ReSpeaker: xvf_host not importable — device control disabled.")
 
 	@property
 	def available(self) -> bool:
@@ -126,7 +130,7 @@ class ReSpeaker:
 
 		if self._device is None:
 			if not self._warned_missing:
-				print("ReSpeaker: device not found, will retry.")
+				log.warning("ReSpeaker: device not found, will retry.")
 				self._warned_missing = True
 			return False
 
@@ -170,7 +174,7 @@ class ReSpeaker:
 		if self._xvf is None:
 			return False
 		if name not in self._xvf.PARAMETERS:
-			print(f"ReSpeaker: unknown parameter '{name}', ignoring.")
+			log.warning(f"ReSpeaker: unknown parameter '{name}', ignoring.")
 			return False
 
 		with self._lock:
@@ -180,7 +184,7 @@ class ReSpeaker:
 				self._device.write(name, values)
 				return True
 			except Exception as e:
-				print(f"ReSpeaker: write {name} failed ({e}), will reconnect.")
+				log.exception(f"ReSpeaker: write {name} failed ({e}), will reconnect.")
 				self._disconnect()
 				return False
 
@@ -189,7 +193,7 @@ class ReSpeaker:
 		if self._xvf is None:
 			return None
 		if name not in self._xvf.PARAMETERS:
-			print(f"ReSpeaker: unknown parameter '{name}', ignoring.")
+			log.warning(f"ReSpeaker: unknown parameter '{name}', ignoring.")
 			return None
 
 		with self._lock:
@@ -198,7 +202,7 @@ class ReSpeaker:
 			try:
 				return self._device.read(name)
 			except Exception as e:
-				print(f"ReSpeaker: read {name} failed ({e}), will reconnect.")
+				log.exception(f"ReSpeaker: read {name} failed ({e}), will reconnect.")
 				self._disconnect()
 				return None
 
@@ -236,15 +240,15 @@ class ReSpeaker:
 				pass
 			self._disconnect()
 
-		print("ReSpeaker: rebooting...")
+		log.info("ReSpeaker: rebooting...")
 		if not self._wait_for(present=False, timeout=REBOOT_GONE_TIMEOUT):
-			print("ReSpeaker: device never left the bus after REBOOT.")
+			log.warning("ReSpeaker: device never left the bus after REBOOT.")
 		if not self._wait_for(present=True, timeout=REBOOT_BACK_TIMEOUT):
-			print("ReSpeaker: device did not re-enumerate after reboot.")
+			log.warning("ReSpeaker: device did not re-enumerate after reboot.")
 			return False
 
 		time.sleep(SETTLE_SECONDS)
-		print("ReSpeaker: reboot complete.")
+		log.info("ReSpeaker: reboot complete.")
 		return True
 
 	def apply_dsp_settings(self) -> None:
@@ -259,7 +263,7 @@ class ReSpeaker:
 			if not self.write(name, values):
 				continue
 			actual = self.read(name)
-			print(f"ReSpeaker: {name} = {actual} (set {values})")
+			log.info(f"ReSpeaker: {name} = {actual} (set {values})")
 
 	def initialize(self) -> None:
 		"""Startup bring-up: reboot to a clean state, then apply the settings
@@ -269,7 +273,7 @@ class ReSpeaker:
 		if not self.reboot():
 			# Still worth trying — the device may be up and simply not have
 			# accepted the reboot.
-			print("ReSpeaker: applying settings without a confirmed reboot.")
+			log.info("ReSpeaker: applying settings without a confirmed reboot.")
 		self.apply_dsp_settings()
 
 	def shutdown(self) -> None:

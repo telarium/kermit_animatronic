@@ -9,6 +9,11 @@ import anthropic
 import requests
 from openai import OpenAI
 from pydispatch import dispatcher
+import logger
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 class LLM:
@@ -114,7 +119,7 @@ class LLM:
 		try:
 			config.read(path)
 		except configparser.Error as e:
-			print(f"LLM: failed to parse config at '{path}': {e}")
+			log.exception(f"LLM: failed to parse config at '{path}': {e}")
 			return
 
 		self.anthropic_key    = config.get("Anthropic", "AnthropicKey",   fallback="").strip()
@@ -123,6 +128,11 @@ class LLM:
 		self.openai_model     = config.get("ChatGPT",   "OpenAIModel",    fallback="gpt-4o-mini").strip() or "gpt-4o-mini"
 		self.deepseek_api_key = config.get("DeepSeek",  "DeepSeekAPIKey", fallback="").strip()
 		self.deepseek_model   = config.get("DeepSeek",  "DeepSeekModel",  fallback="deepseek-chat").strip()
+		# Registered so no log line can ever carry them, wherever they
+		# end up quoted (an API error body, most likely).
+		for secret in (self.anthropic_key, self.openai_key, self.deepseek_api_key):
+			logger.register_secret(secret)
+
 		self.llm_context      = config.get("LLM",       "LLMContext",     fallback="").strip()
 		if not self.llm_context:
 			# Backward compat: LLMContext used to live under [DeepSeek].
@@ -130,7 +140,7 @@ class LLM:
 
 		self.llm_context_short = config.get("LLM", "LLMContextShort", fallback="").strip()
 		if not self.llm_context_short:
-			print("LLM: no LLMContextShort set, offline path will use the full context.")
+			log.warning("LLM: no LLMContextShort set, offline path will use the full context.")
 			self.llm_context_short = self.llm_context
 
 		self.warm_up()
@@ -144,7 +154,7 @@ class LLM:
 		self._history.clear()
 		self._fallback_history.clear()
 		self._last_tier = ""
-		print("LLM: conversation history cleared.")
+		log.info("LLM: conversation history cleared.")
 
 	def warm_up(self) -> None:
 		"""Health-check the local server and pay its cold prompt-eval cost once,
@@ -190,7 +200,7 @@ class LLM:
 		t0 = time.monotonic()
 		response = self._send_cloud(query)
 		if response is not None:
-			print(f"LLM: cloud replied in {time.monotonic() - t0:.1f}s.")
+			log.info(f"LLM: cloud replied in {time.monotonic() - t0:.1f}s.")
 			self._last_tier = "cloud"
 			self._history.append({"role": "user",      "content": query})
 			self._history.append({"role": "assistant", "content": response})
@@ -200,12 +210,12 @@ class LLM:
 		t1 = time.monotonic()
 		response = self._send_fallback(query)
 		if response is not None:
-			print(f"LLM: cloud gave up after {t1 - t0:.1f}s; "
+			log.warning(f"LLM: cloud gave up after {t1 - t0:.1f}s; "
 			      f"offline replied in {time.monotonic() - t1:.1f}s.")
 			self._on_response(response)
 			return
 
-		print("LLM: all providers failed — no response available.")
+		log.error("LLM: all providers failed — no response available.")
 		self._on_fail()
 
 	def _send_cloud(self, query: str) -> Optional[str]:
@@ -230,7 +240,7 @@ class LLM:
 				)
 				return result.content[0].text
 			except Exception as e:
-				print(f"LLM: Anthropic request failed: {e}")
+				log.exception(f"LLM: Anthropic request failed: {e}")
 
 		if self.openai_key and remaining() > self.MIN_ATTEMPT_S:
 			try:
@@ -241,7 +251,7 @@ class LLM:
 				)
 				return result.choices[0].message.content
 			except Exception as e:
-				print(f"LLM: OpenAI request failed: {e}")
+				log.exception(f"LLM: OpenAI request failed: {e}")
 
 		if self.deepseek_api_key and remaining() > self.MIN_ATTEMPT_S:
 			try:
@@ -257,18 +267,18 @@ class LLM:
 				)
 				return result.choices[0].message.content
 			except Exception as e:
-				print(f"LLM: DeepSeek request failed: {e}")
+				log.exception(f"LLM: DeepSeek request failed: {e}")
 
 		return None
 
 	def _send_fallback(self, query: str) -> Optional[str]:
 		if not self._fallback_available and not self._health_check():
-			print("LLM: offline model unavailable.")
+			log.warning("LLM: offline model unavailable.")
 			return None
 		self._fallback_available = True
 
 		if self._last_tier != "fallback":
-			print("LLM: failing over to the offline model.")
+			log.warning("LLM: failing over to the offline model.")
 			self._fallback_history.clear()
 
 		messages = self._build_messages(query, self._fallback_history, fallback=True)
@@ -296,7 +306,7 @@ class LLM:
 		if body.endswith("?"):
 			# Re-emit it bare so trailing punctuation can't hide it downstream.
 			return body + " [?]"
-		print("LLM: dropped a [?] the offline model added to a statement.")
+		log.warning("LLM: dropped a [?] the offline model added to a statement.")
 		return body
 
 	def _health_check(self) -> bool:
@@ -333,13 +343,13 @@ class LLM:
 			result.raise_for_status()
 			return result.json()["choices"][0]["message"]["content"].strip()
 		except Exception as e:
-			print(f"LLM: offline request failed: {e}")
+			log.exception(f"LLM: offline request failed: {e}")
 			return None
 
 	def _warm_up(self) -> None:
 		self._fallback_available = self._health_check()
 		if not self._fallback_available:
-			print(f"LLM: no offline model at {self.FALLBACK_URL} — cloud only.")
+			log.warning(f"LLM: no offline model at {self.FALLBACK_URL} — cloud only.")
 			return
 
 		t0 = time.monotonic()
@@ -347,13 +357,13 @@ class LLM:
 		# max_tokens=1, and the result is discarded — it must never be
 		# dispatched for playback.
 		if self._request_fallback(messages, 1, self.FALLBACK_WARMUP_TIMEOUT_S) is None:
-			print("LLM: offline warm-up request failed.")
+			log.error("LLM: offline warm-up request failed.")
 			self._fallback_available = False
 			return
 		elapsed = time.monotonic() - t0
-		print(f"LLM: offline model warm in {elapsed:.1f}s.")
+		log.info(f"LLM: offline model warm in {elapsed:.1f}s.")
 		if elapsed > 60:
-			print("LLM: that is slow for a 1.7B — check that llama-server "
+			log.info("LLM: that is slow for a 1.7B — check that llama-server "
 			      "offloaded its layers to the GPU (journalctl -u llama-server "
 			      "| grep -i offload).")
 

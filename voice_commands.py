@@ -6,6 +6,10 @@ from datetime import datetime
 from typing import Optional
 from rapidfuzz import process, fuzz
 from pydispatch import dispatcher
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 class VoiceCommandHandler:
 
@@ -151,12 +155,12 @@ class VoiceCommandHandler:
 		# visible at startup rather than discovered mid-show.
 		synced = self._ntp_synchronized()
 		if synced is False:
-			print("VoiceCommandHandler: system clock is not NTP-synchronized "
+			log.info("VoiceCommandHandler: system clock is not NTP-synchronized "
 			      f"(reads {datetime.now():%Y-%m-%d %H:%M}).")
 		elif synced is None:
-			print("VoiceCommandHandler: could not determine clock sync state "
+			log.error("VoiceCommandHandler: could not determine clock sync state "
 			      f"(reads {datetime.now():%Y-%m-%d %H:%M}).")
-		print("VoiceCommandHandler: initialized.")
+		log.info("VoiceCommandHandler: initialized.")
 
 	FOLLOWUP_INTENTS = ("stop",)	
 
@@ -186,11 +190,11 @@ class VoiceCommandHandler:
 		match = process.extractOne(text, phrase_strings, scorer=fuzz.ratio) if phrase_strings else None
 		if match and match[1] >= self.CONFIDENCE_THRESHOLD:
 			intent_name = next(name for phrase, name in phrase_map if phrase == match[0])
-			print(f"VoiceCommandHandler: matched intent='{intent_name}' phrase='{match[0]}' score={match[1]}")
+			log.info(f"VoiceCommandHandler: matched intent='{intent_name}' phrase='{match[0]}' score={match[1]}")
 			self._dispatch_intent(intent_name)
 			return True
 
-		print(f"VoiceCommandHandler: no confident match for '{transcript}' (best score={match[1] if match else 0})")
+		log.warning(f"VoiceCommandHandler: no confident match for '{transcript}' (best score={match[1] if match else 0})")
 		return False
 
 	def _match_play_by_name(self, text: str) -> str | None:
@@ -242,17 +246,17 @@ class VoiceCommandHandler:
 	# --- intent handlers ---
 
 	def _handle_sing(self) -> None:
-		print("VoiceCommandHandler: sing")
+		log.info("VoiceCommandHandler: sing")
 		show_list = self._show_player.show_list
 		if not show_list:
-			print("VoiceCommandHandler: no shows available.")
+			log.warning("VoiceCommandHandler: no shows available.")
 			return
 		show_name = random.choice(show_list)
-		print(f"VoiceCommandHandler: randomly selected show '{show_name}'")
+		log.info(f"VoiceCommandHandler: randomly selected show '{show_name}'")
 		dispatcher.send(signal='showStatus', status='play', show_name=show_name)
 
 	def _handle_stop(self) -> None:
-		print("VoiceCommandHandler: stop")
+		log.info("VoiceCommandHandler: stop")
 		dispatcher.send(signal='showStatus', status='stop')
 
 	def _get_show_index(self, show_list: list) -> list:
@@ -265,7 +269,7 @@ class VoiceCommandHandler:
 					index.append((key, show))
 			self._show_index = index
 			self._show_index_source = source
-			print(f"VoiceCommandHandler: indexed {len(show_list)} shows "
+			log.info(f"VoiceCommandHandler: indexed {len(show_list)} shows "
 			      f"as {len(index)} match keys.")
 		return self._show_index
 
@@ -276,7 +280,7 @@ class VoiceCommandHandler:
 		"""
 		show_list = self._show_player.show_list
 		if not show_list:
-			print("VoiceCommandHandler: no shows available.")
+			log.warning("VoiceCommandHandler: no shows available.")
 			return False
 
 		query = self._normalize(self._QUERY_FILLER.sub("", song_name))
@@ -308,7 +312,7 @@ class VoiceCommandHandler:
 		matched_show, (best_score, matched_key) = ranked[0]
 
 		if best_score < self.SHOW_CONFIDENCE_THRESHOLD:
-			print(f"VoiceCommandHandler: play by name — no confident match for "
+			log.warning(f"VoiceCommandHandler: play by name — no confident match for "
 			      f"'{song_name}' (normalized '{query}', best='{matched_key}' "
 			      f"score={best_score:.1f})")
 			return False
@@ -318,18 +322,18 @@ class VoiceCommandHandler:
 		# hears the wrong song.
 		if len(ranked) > 1:
 			runner_up, (runner_score, _) = ranked[1]
-			print(f"VoiceCommandHandler: play by name — '{song_name}' matched "
+			log.info(f"VoiceCommandHandler: play by name — '{song_name}' matched "
 			      f"'{matched_show}' via '{matched_key}' (score={best_score:.1f}; "
 			      f"next best '{runner_up}' at {runner_score:.1f})")
 		else:
-			print(f"VoiceCommandHandler: play by name — '{song_name}' matched "
+			log.info(f"VoiceCommandHandler: play by name — '{song_name}' matched "
 			      f"'{matched_show}' via '{matched_key}' (score={best_score:.1f})")
 
 		dispatcher.send(signal='showStatus', status='play', show_name=matched_show)
 		return True
 
 	def _handle_connect_wifi(self, ssid: str) -> None:
-		print(f"VoiceCommandHandler: connect to wifi requested for '{ssid}'")
+		log.info(f"VoiceCommandHandler: connect to wifi requested for '{ssid}'")
 		dispatcher.send(signal="playVoiceFile", file="connect_to_wifi.ogg")
 		self._wifi_management.connect(ssid)
 
@@ -400,7 +404,7 @@ class VoiceCommandHandler:
 		"""
 		if datetime.now().year >= cls._MIN_PLAUSIBLE_YEAR:
 			return True
-		print("VoiceCommandHandler: system clock reads "
+		log.info("VoiceCommandHandler: system clock reads "
 		      f"{datetime.now():%Y-%m-%d %H:%M} — refusing to state the time.")
 		return False
 
@@ -495,5 +499,5 @@ class VoiceCommandHandler:
 		dispatcher.send(signal="playVoiceFile", file="who_are_you.ogg")
 
 	def _handle_greeting(self) -> None:
-		print("VoiceCommandHandler: greeting")
+		log.info("VoiceCommandHandler: greeting")
 		dispatcher.send(signal="playVoiceFile", file="who_are_you.ogg")

@@ -17,6 +17,10 @@ from typing import Dict, List, Optional, Set
 
 from evdev import InputDevice, ecodes, list_devices
 from pydispatch import dispatcher
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 # How often to look for newly attached keyboards.
 RESCAN_SECONDS = 2.0
@@ -71,7 +75,7 @@ class USBKeyboardReader:
 
 		self._thread = threading.Thread(target=self._run, daemon=True)
 		self._thread.start()
-		print("USBKeyboardReader: started.")
+		log.info("USBKeyboardReader: started.")
 
 	# -------------------------------------------------------------------------
 	# Public API
@@ -90,7 +94,7 @@ class USBKeyboardReader:
 			for device in list(self._devices.values()):
 				self._remove(device)
 		self._selector.close()
-		print("USBKeyboardReader: stopped.")
+		log.info("USBKeyboardReader: stopped.")
 
 	# -------------------------------------------------------------------------
 	# Internal: device management
@@ -100,7 +104,7 @@ class USBKeyboardReader:
 		try:
 			paths = list_devices()
 		except OSError as e:
-			print(f"USBKeyboardReader: could not list input devices: {e}")
+			log.exception(f"USBKeyboardReader: could not list input devices: {e}")
 			return
 
 		for path in paths:
@@ -120,7 +124,7 @@ class USBKeyboardReader:
 			try:
 				self._selector.register(device, selectors.EVENT_READ)
 			except (KeyError, ValueError, OSError) as e:
-				print(f"USBKeyboardReader: could not watch {device.path}: {e}")
+				log.exception(f"USBKeyboardReader: could not watch {device.path}: {e}")
 				device.close()
 				return
 			self._devices[device.path] = device
@@ -131,9 +135,9 @@ class USBKeyboardReader:
 			try:
 				device.grab()
 			except OSError as e:
-				print(f"USBKeyboardReader: could not grab {device.path}: {e}")
+				log.exception(f"USBKeyboardReader: could not grab {device.path}: {e}")
 
-		print(f"USBKeyboardReader: connected {device.name} ({device.path})")
+		log.info(f"USBKeyboardReader: connected {device.name} ({device.path})")
 
 	def _remove(self, device: InputDevice) -> None:
 		with self._lock:
@@ -158,7 +162,7 @@ class USBKeyboardReader:
 				close()
 			except Exception:
 				pass
-		print(f"USBKeyboardReader: disconnected {path}")
+		log.info(f"USBKeyboardReader: disconnected {path}")
 
 	# -------------------------------------------------------------------------
 	# Internal: read loop

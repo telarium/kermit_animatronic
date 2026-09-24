@@ -4,6 +4,10 @@ import threading
 import time
 from pydispatch import dispatcher
 from typing import Optional, List
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 GADGET_ROOT   = "/sys/kernel/config/usb_gadget/animatronic"
 GADGET_UDC    = f"{GADGET_ROOT}/UDC"
@@ -22,12 +26,12 @@ class MIDI:
 		self._stop_rx   = threading.Event()
 
 		if not self._setup_gadget():
-			print("MIDI: gadget setup failed — MIDI unavailable.")
+			log.error("MIDI: gadget setup failed — MIDI unavailable.")
 			return
 
 		dev = device or self._find_device()
 		if not dev:
-			print("MIDI: no raw MIDI device found — MIDI unavailable.")
+			log.warning("MIDI: no raw MIDI device found — MIDI unavailable.")
 			return
 
 		try:
@@ -35,9 +39,9 @@ class MIDI:
 			self._rx_fd = os.open(dev, os.O_RDONLY | os.O_NONBLOCK)
 			self._tx_fd = os.open(dev, os.O_WRONLY)
 			self._device = dev
-			print(f"MIDI: opened {dev}")
+			log.info(f"MIDI: opened {dev}")
 		except OSError as e:
-			print(f"MIDI: failed to open {dev} — {e}")
+			log.exception(f"MIDI: failed to open {dev} — {e}")
 			return
 
 		self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
@@ -64,7 +68,7 @@ class MIDI:
 					card_num = parts[0]
 					dev = f"/dev/snd/midiC{card_num}D0"
 					if os.path.exists(dev):
-						print(f"MIDI: found device at {dev} (card {card_num})")
+						log.info(f"MIDI: found device at {dev} (card {card_num})")
 						return dev
 		return None
 
@@ -77,7 +81,7 @@ class MIDI:
 		via configfs. Returns True if the gadget is active."""
 
 		if self._gadget_active():
-			print("MIDI: gadget already active.")
+			log.info("MIDI: gadget already active.")
 			return True
 
 		self._teardown_gadget()
@@ -90,8 +94,8 @@ class MIDI:
 					stderr=subprocess.DEVNULL,
 				)
 			except subprocess.CalledProcessError as e:
-				print(f"MIDI: modprobe {mod} failed — {e}")
-				print("MIDI: is usb_f_midi.ko installed? Run setup.py first.")
+				log.exception(f"MIDI: modprobe {mod} failed — {e}")
+				log.error("MIDI: is usb_f_midi.ko installed? Run setup.py first.")
 				return False
 
 		try:
@@ -125,22 +129,22 @@ class MIDI:
 
 			udc_names = os.listdir("/sys/class/udc")
 			if not udc_names:
-				print("MIDI: no UDC found — is the USB-C port available?")
+				log.warning("MIDI: no UDC found — is the USB-C port available?")
 				return False
 
 			w(f"{G}/UDC", udc_names[0])
 
 		except OSError as e:
-			print(f"MIDI: configfs setup failed — {e}")
+			log.exception(f"MIDI: configfs setup failed — {e}")
 			return False
 
 		time.sleep(0.5)
 
 		if not self._gadget_active():
-			print("MIDI: gadget configured but UDC did not bind.")
+			log.warning("MIDI: gadget configured but UDC did not bind.")
 			return False
 
-		print(f"MIDI: gadget up on {udc_names[0]}.")
+		log.info(f"MIDI: gadget up on {udc_names[0]}.")
 		return True
 
 	def _teardown_gadget(self) -> None:
@@ -172,7 +176,7 @@ class MIDI:
 			_rmdir(f"{G}/strings")
 			_rmdir(G)
 		except OSError as e:
-			print(f"MIDI: teardown warning — {e}")
+			log.error(f"MIDI: teardown warning — {e}")
 
 	def _gadget_active(self) -> bool:
 		try:
@@ -220,7 +224,7 @@ class MIDI:
 			os.write(self._tx_fd, data)
 			#print(f"MIDI: sent {'note_on' if value == 1 else 'note_off'} note={note} velocity={127 if value == 1 else 0}")
 		except OSError as e:
-			print(f"MIDI: send failed — {e}")
+			log.exception(f"MIDI: send failed — {e}")
 
 	# ------------------------------------------------------------------ #
 	#  Cleanup                                                             #
@@ -319,7 +323,7 @@ def parse_file(file: str) -> List[List]:
 			elif message.type == 'note_off':
 				events.append([current_time_ms, message.note, 0])
 	except Exception as e:
-		print(f"MIDI: failed to parse '{file}': {e}")
+		log.exception(f"MIDI: failed to parse '{file}': {e}")
 	return events
 
 

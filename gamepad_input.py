@@ -5,6 +5,10 @@ from enum import Enum
 from dataclasses import dataclass
 from pydispatch import dispatcher
 from typing import Optional, Dict, Any, List
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 class Button(Enum):
 	# Bumpers
@@ -87,7 +91,7 @@ class USBGamepadReader:
 
 		self.device: Optional[InputDevice] = self._find_gamepad()
 		if self.device:
-			print(f"Gamepad detected: {self.device.name} ({self.device.path})")
+			log.info(f"Gamepad detected: {self.device.name} ({self.device.path})")
 			self.left_stick: StickState = StickState()
 			self.right_stick: StickState = StickState()
 			self.dpad_states: Dict[str, bool] = {'left': False, 'right': False, 'up': False, 'down': False}
@@ -95,7 +99,7 @@ class USBGamepadReader:
 			self.update_thread: threading.Thread = threading.Thread(target=self.read_inputs, daemon=True)
 			self.update_thread.start()
 		else:
-			print("No gamepad detected.")
+			log.warning("No gamepad detected.")
 
 	def _find_gamepad(self) -> Optional[InputDevice]:
 		devices = [InputDevice(path) for path in list_devices()]
@@ -126,16 +130,16 @@ class USBGamepadReader:
 	def read_inputs(self) -> None:
 		while True:
 			if not self.device:
-				print("No gamepad device available. Trying to reconnect...")
+				log.warning("No gamepad device available. Trying to reconnect...")
 				self.device = self._find_gamepad()
 				if self.device:
-					print(f"Reconnected to {self.device.name} ({self.device.path})")
+					log.info(f"Reconnected to {self.device.name} ({self.device.path})")
 					self.abs_ranges = self._get_abs_ranges()
 				else:
 					time.sleep(2)
 					continue
 
-			print(f"Listening for inputs on {self.device.name}...")
+			log.info(f"Listening for inputs on {self.device.name}...")
 			try:
 				for event in self.device.read_loop():
 					if event.type == ecodes.EV_KEY:
@@ -143,7 +147,7 @@ class USBGamepadReader:
 					elif event.type == ecodes.EV_ABS:
 						self._process_abs_event(event)
 			except OSError as e:
-				print(f"Device error: {e}. Attempting to reconnect...")
+				log.exception(f"Device error: {e}. Attempting to reconnect...")
 				self.device = None
 				time.sleep(1)
 
@@ -165,7 +169,7 @@ class USBGamepadReader:
 			if self.start_button_down and self.select_button_down:
 				dispatcher.send(signal="mirrorModeToggle")
 		else:
-			print(f"Gamepad: unmapped button code={keycode} val={event.value}")
+			log.info(f"Gamepad: unmapped button code={keycode} val={event.value}")
 
 	def _process_abs_event(self, event: InputEvent) -> None:
 		code = event.code

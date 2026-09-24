@@ -7,6 +7,10 @@ import numpy as np
 from pydispatch import dispatcher
 import mic_stream
 from openwakeword.model import Model
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 
 class WakeWord:
@@ -34,7 +38,7 @@ class WakeWord:
 		os.close(_old_stderr)
 		_devnull.close()
 
-		print(f"WakeWord: model loaded from {self.model_path}")
+		log.info(f"WakeWord: model loaded from {self.model_path}")
 
 	# -------------------------------------------------------------------------
 	# Public API
@@ -46,10 +50,10 @@ class WakeWord:
 		try:
 			config.read(path)
 		except configparser.Error as e:
-			print(f"WakeWord: failed to parse config at '{path}': {e}")
+			log.exception(f"WakeWord: failed to parse config at '{path}': {e}")
 			return
 		self.threshold = config.getfloat("Wakeword", "Threshold", fallback=0.3)
-		print(f"WakeWord: threshold set to {self.threshold}")
+		log.info(f"WakeWord: threshold set to {self.threshold}")
 
 	def set_enabled(self, enabled: bool) -> None:
 		if enabled and not self._enabled:
@@ -64,14 +68,14 @@ class WakeWord:
 			self._thread = threading.Thread(target=self._listen_loop, daemon=True)
 			self._thread.start()
 			dispatcher.send(signal="updateStatus", id="Voice Command Status", value=f"Waiting for '{self.description}'...")
-			print("WakeWord: listening started.")
+			log.info("WakeWord: listening started.")
 		elif not enabled and self._enabled:
 			self._enabled = False
 			self._stop_event.set()
 			# Wait for the thread to actually finish before returning.
 			if self._thread is not None and self._thread.is_alive():
 				self._thread.join(timeout=4.0)
-			print("WakeWord: listening stopped.")
+			log.info("WakeWord: listening stopped.")
 
 	def wait_until_stopped(self, timeout: float = 4.0) -> bool:
 		"""Block until the mic stream has fully closed. Returns True if stopped in time."""
@@ -104,7 +108,7 @@ class WakeWord:
 				score = prediction.get(os.path.splitext(os.path.basename(self.model_path))[0], 0)
 
 				if score > self.threshold:
-					print(f"Wakeword detected! (score: {score:.2f})")
+					log.info(f"Wakeword detected! (score: {score:.2f})")
 					# Timestamp detection so STT can pull the audio that
 					# follows it out of the ring buffer, including whatever
 					# was said while the acknowledgement animation played.
@@ -117,12 +121,12 @@ class WakeWord:
 						self.on_detected(score)
 
 		except Exception as e:
-			print(f"WakeWord: error in listen loop: {e}")
+			log.exception(f"WakeWord: error in listen loop: {e}")
 		finally:
 			if q is not None:
 				mic_stream.unsubscribe(q)
 			self._stopped_event.set()
-			print("WakeWord: listen loop exited.")
+			log.info("WakeWord: listen loop exited.")
 
 	def __del__(self):
 		self.set_enabled(False)

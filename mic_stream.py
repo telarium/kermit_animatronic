@@ -26,6 +26,10 @@ import subprocess
 import threading
 import time
 from typing import Optional
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 MIC_RATE = 16000
 # 1280 frames = 80ms at 16kHz. This is openwakeword's required chunk size, and
@@ -69,8 +73,8 @@ def find_capture_device() -> str:
 					if m:
 						return f"plughw:{m.group(1)},{m.group(2)}"
 		except Exception as e:
-			print(f"Mic: error scanning arecord -l: {e}")
-		print(f"Mic: ReSpeaker not found, retrying ({attempt + 1}/20)...")
+			log.exception(f"Mic: error scanning arecord -l: {e}")
+		log.warning(f"Mic: ReSpeaker not found, retrying ({attempt + 1}/20)...")
 		time.sleep(1)
 	raise RuntimeError("ReSpeaker not found — is it plugged in?")
 
@@ -197,7 +201,7 @@ class _MicStream:
 					stdout=subprocess.PIPE,
 					stderr=subprocess.DEVNULL,
 				)
-				print(f"Mic: shared capture started on {device} "
+				log.info(f"Mic: shared capture started on {device} "
 				      f"({DEVICE_CHANNELS}ch, reading beam {BEAM_CHANNEL}, pid={proc.pid})")
 
 				while not self._stop.is_set():
@@ -231,7 +235,7 @@ class _MicStream:
 								pass
 
 			except Exception as e:
-				print(f"Mic: capture error: {e}")
+				log.exception(f"Mic: capture error: {e}")
 			finally:
 				if proc is not None:
 					try:
@@ -246,10 +250,10 @@ class _MicStream:
 			if not self._stop.is_set():
 				# Covers the ReSpeaker being unplugged and replugged: rediscover
 				# the device on the next pass rather than dying permanently.
-				print("Mic: capture dropped, reopening...")
+				log.warning("Mic: capture dropped, reopening...")
 				time.sleep(0.5)
 
-		print("Mic: shared capture stopped.")
+		log.info("Mic: shared capture stopped.")
 
 
 def _get_mic() -> _MicStream:

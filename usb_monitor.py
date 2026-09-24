@@ -5,6 +5,10 @@ import time
 import pyudev
 from pydispatch import dispatcher
 from typing import Optional
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 # USB mass storage only. ReSpeaker bring-up used to live here too; it is now
 # respeaker.py.
@@ -17,11 +21,11 @@ def find_usb_audio_card() -> Optional[str]:
 		for line in result.stdout.splitlines():
 			if "usb audio" in line.lower() and "respeaker" not in line.lower():
 				card_num = line.split(":")[0].replace("card", "").strip()
-				print(f"Audio: found USB audio at card {card_num}")
+				log.info(f"Audio: found USB audio at card {card_num}")
 				return f"plughw:{card_num},0"
 	except Exception as e:
-		print(f"Audio: error finding USB audio card: {e}")
-	print("Audio: USB audio not found.")
+		log.exception(f"Audio: error finding USB audio card: {e}")
+	log.warning("Audio: USB audio not found.")
 	return None
 
 
@@ -35,7 +39,7 @@ def get_mount_point() -> Optional[str]:
 		if result.returncode == 0 and result.stdout.strip():
 			return result.stdout.strip()
 	except Exception as e:
-		print(f"USBMonitor: error checking mount point: {e}")
+		log.exception(f"USBMonitor: error checking mount point: {e}")
 	return None
 
 
@@ -59,12 +63,12 @@ def _watch() -> None:
 		device_name = device.sys_name
 
 		if device.action == 'add':
-			print(f"USBMonitor: drive connected ({device_name})")
+			log.info(f"USBMonitor: drive connected ({device_name})")
 			dispatcher.send(signal="playVoiceFile", file="usb_connected.ogg")
 			threading.Timer(2.0, _check_mounted).start()
 
 		elif device.action == 'remove':
-			print(f"USBMonitor: drive removed ({device_name})")
+			log.info(f"USBMonitor: drive removed ({device_name})")
 			# The mount lingers briefly after the device goes, so confirm
 			# before telling the system to fall back to the local backup.
 			threading.Timer(2.0, _check_unmounted).start()
@@ -77,13 +81,13 @@ _MOUNT_RETRIES = 10
 def _check_mounted(attempt: int = 1) -> None:
 	"""Check if the drive mounted successfully and retry if not."""
 	if is_mounted():
-		print(f"USBMonitor: drive mounted at {USB_MOUNT_POINT}")
+		log.info(f"USBMonitor: drive mounted at {USB_MOUNT_POINT}")
 		_announce_drive()
 	elif attempt < _MOUNT_RETRIES:
-		print("USBMonitor: drive not yet mounted, retrying...")
+		log.warning("USBMonitor: drive not yet mounted, retrying...")
 		threading.Timer(2.0, _check_mounted, args=(attempt + 1,)).start()
 	else:
-		print("USBMonitor: no drive mounted.")
+		log.warning("USBMonitor: no drive mounted.")
 
 
 def _check_unmounted() -> None:
@@ -92,7 +96,7 @@ def _check_unmounted() -> None:
 	try:
 		dispatcher.send(signal='usbDetached')
 	except Exception as e:
-		print(f"USBMonitor: error dispatching detach: {e}")
+		log.exception(f"USBMonitor: error dispatching detach: {e}")
 
 
 def _announce_drive() -> None:
@@ -100,13 +104,13 @@ def _announce_drive() -> None:
 	matches = sorted(glob.glob(f"{USB_MOUNT_POINT}/*.cfg"))
 	cfg_path = matches[0] if matches else ""
 	if cfg_path:
-		print(f"USBMonitor: config file found: {cfg_path}")
+		log.info(f"USBMonitor: config file found: {cfg_path}")
 	else:
-		print("USBMonitor: no .cfg file found on drive.")
+		log.warning("USBMonitor: no .cfg file found on drive.")
 	try:
 		dispatcher.send(signal='usbAttached', path=cfg_path)
 	except Exception as e:
-		print(f"USBMonitor: error dispatching drive attach: {e}")
+		log.exception(f"USBMonitor: error dispatching drive attach: {e}")
 
 
 # Module-level setup — starts automatically on import
@@ -117,7 +121,7 @@ _monitor.filter_by(subsystem='block')
 threading.Thread(target=_watch, daemon=True).start()
 _check_mounted()
 
-print("USBMonitor: initialized.")
+log.info("USBMonitor: initialized.")
 
 
 if __name__ == "__main__":
