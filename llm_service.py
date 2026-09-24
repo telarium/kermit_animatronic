@@ -90,6 +90,7 @@ class LLM:
 		self.anthropic_key: str = ""
 		self.anthropic_model: str = "claude-sonnet-4-6"
 		self.openai_key: str = ""
+		self.openai_model: str = "gpt-4o-mini"
 		self.deepseek_api_key: str = ""
 		self.deepseek_model: str = "deepseek-chat"
 
@@ -119,6 +120,7 @@ class LLM:
 		self.anthropic_key    = config.get("Anthropic", "AnthropicKey",   fallback="").strip()
 		self.anthropic_model  = config.get("Anthropic", "AnthropicModel", fallback="claude-sonnet-4-6").strip()
 		self.openai_key       = config.get("ChatGPT",   "OpenAIKey",      fallback="").strip()
+		self.openai_model     = config.get("ChatGPT",   "OpenAIModel",    fallback="gpt-4o-mini").strip() or "gpt-4o-mini"
 		self.deepseek_api_key = config.get("DeepSeek",  "DeepSeekAPIKey", fallback="").strip()
 		self.deepseek_model   = config.get("DeepSeek",  "DeepSeekModel",  fallback="deepseek-chat").strip()
 		self.llm_context      = config.get("LLM",       "LLMContext",     fallback="").strip()
@@ -234,7 +236,7 @@ class LLM:
 			try:
 				client = OpenAI(api_key=self.openai_key, timeout=remaining(), max_retries=0)
 				result = client.chat.completions.create(
-					model="gpt-4o-mini",
+					model=self.openai_model,
 					messages=messages,
 				)
 				return result.choices[0].message.content
