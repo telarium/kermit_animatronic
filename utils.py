@@ -20,13 +20,15 @@ import configparser
 CONFIG_FILENAME = "config.cfg"
 TEMPLATE_FILENAME = "config_template.cfg"
 SHOWS_DIRNAME = "shows"
+DOCS_DIRNAME = "docs"
 
 # Ceiling on the local shows backup. The SSD also holds the models and the
 # llama.cpp build, so the backup is not allowed to grow without bound.
 MAX_LOCAL_SHOWS_BYTES = 1024 * 1024 * 1024
 
-# Copied to the USB root when a drive is restored from the local backup.
-DOCUMENT_EXTENSIONS = (".doc", ".docx")
+# Copied to the USB root whenever a drive is present, so the documentation
+# travelling with it is never older than the software.
+DOCUMENT_EXTENSIONS = (".pdf",)
 
 
 # Matches a "Key = value" line, capturing indent, key, separator, and value.
@@ -203,6 +205,17 @@ def copy_documents(src_dir: str, dst_dir: str) -> int:
 	return copied
 
 
+def copy_docs_to_usb(base_dir: str, usb_mount_point: str, usb_mounted: bool) -> int:
+	"""Refresh the documents at the USB root from docs/, returning the number
+	rewritten. Unlike the shows backup, an existing copy is replaced rather
+	than kept — there is only ever one current version of a document.
+
+	No-op with no drive attached."""
+	if not usb_mounted:
+		return 0
+	return copy_documents(os.path.join(base_dir, DOCS_DIRNAME), usb_mount_point)
+
+
 def resolve_storage(base_dir: str, usb_mount_point: str, usb_mounted: bool, usb_config_path: str = "") -> tuple:
 	"""Decide where the config and the shows live, and refresh the backup.
 
@@ -259,7 +272,7 @@ def restore_backup_to_usb(base_dir: str, usb_mount_point: str, usb_mounted: bool
 
 	local_shows = os.path.join(base_dir, SHOWS_DIRNAME)
 	shows = copy_new_files(local_shows, os.path.join(usb_mount_point, SHOWS_DIRNAME))
-	documents = copy_documents(base_dir, usb_mount_point)
+	documents = copy_documents(os.path.join(base_dir, DOCS_DIRNAME), usb_mount_point)
 
 	message = (f"Restored the config, {shows} show file(s) and "
 	           f"{documents} document(s) to the USB drive.")
