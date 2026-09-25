@@ -180,13 +180,15 @@ class VoicePlayer:
 		for ch in self.channels:
 			log.info(f"VoicePlayer: driving {ch.describe()}")
 
-	def play(self, filename: str) -> None:
-		"""Play a single voice file, stopping anything currently playing."""
+	def play(self, filename: str, tag: Optional[str] = None) -> None:
+		"""Play a single voice file, stopping anything currently playing.
+		tag is handed back in the voicePlaybackEvent that ends this playback,
+		so the listener knows exactly which playback finished."""
 		self._stop_current()
 		self._stop_event.clear()
 		self._thread = threading.Thread(
 			target=self._play_sequence_worker,
-			args=([filename],),
+			args=([filename], tag),
 			daemon=True,
 		)
 		self._thread.start()
@@ -204,7 +206,7 @@ class VoicePlayer:
 
 	def stop(self) -> None:
 		"""Stop all playback immediately."""
-		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False)
+		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False, bCompleted=False)
 		self._stop_current()
 
 	# -------------------------------------------------------------------------
@@ -245,27 +247,35 @@ class VoicePlayer:
 		"""
 		audio_setup.wake_dac_if_needed(self.pygame)
 
-	def _play_sequence_worker(self, filenames: List[str]) -> None:
+	def _play_sequence_worker(self, filenames: List[str], tag: Optional[str] = None) -> None:
 		log.info(f"VoicePlayer: worker started, {len(filenames)} file(s)")
 		self._wake_dac_if_needed()
-		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True)
+		dispatcher.send(signal="voicePlaybackEvent", bPlaying=True, tag=tag)
 		dispatcher.send(signal="updateStatus", id="Voice Playback", value="Speaking...")
+		# Completed means every file played to its end: not stopped, nothing
+		# missing, nothing failed.
+		completed = True
 		for filename in filenames:
 			if self._stop_event.is_set():
+				completed = False
 				break
 
 			path = self._resolve_path(filename)
 			if path is None:
+				completed = False
 				continue
 
 			try:
 				self._play_file(path)
 			except Exception as e:
+				completed = False
 				log.exception(f"VoicePlayer: error playing '{filename}': {e}")
 
+		if self._stop_event.is_set():
+			completed = False
 		self._release_channels()
-		log.info(f"VoicePlayer: worker done, dispatching bPlaying=False")
-		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False)
+		log.info(f"VoicePlayer: worker done, dispatching bPlaying=False (completed={completed})")
+		dispatcher.send(signal="voicePlaybackEvent", bPlaying=False, bCompleted=completed, tag=tag)
 
 	def _release_channels(self) -> None:
 		"""Drop every audio-driven movement. Called when a file or sequence
