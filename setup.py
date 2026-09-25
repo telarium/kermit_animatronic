@@ -51,12 +51,15 @@ class Setup:
 			"sherpa-onnx",
 			# USB-serial for ProgramBlue / PL2303 adapter
 			"pyserial",
+			# mDNS discovery of other characters for group shows
+			"zeroconf",
 		])
 		self.setup_sherpa_models()
 		self.setup_llama()
 		self.setup_openwakeword_models()
 		self.setup_respeaker()
 		self.setup_pl2303()
+		self.setup_group_show_network()
 		self.setup_bashrc()
 
 	def install_packages(self, packages: List[str]) -> None:
@@ -445,6 +448,52 @@ WantedBy=multi-user.target
 		print(f"pl2303: added '{real_user}' to dialout group — re-login required to take effect.")
 
 		print("pl2303: done.")
+
+	# L4T ships default-wifi-powersave-on.conf (wifi.powersave = 3). conf.d
+	# files load in alphabetical order and later settings win, so this sorts
+	# after it rather than editing the vendor file, which a package update
+	# could put back.
+	WIFI_POWERSAVE_CONF = "/etc/NetworkManager/conf.d/99-animatronic-wifi-powersave.conf"
+	WIFI_POWERSAVE_CONTENT = (
+		"# Written by the animatronic setup.py. WiFi power saving holds packets\n"
+		"# until the radio wakes, which wrecks group-show clock sync.\n"
+		"# 2 = disable (3 = enable, the L4T default).\n"
+		"[connection]\n"
+		"wifi.powersave = 2\n"
+	)
+	# Must match peer_network.SYNC_PORT.
+	GROUP_SHOW_UDP_PORTS = (5353, 47811)
+
+	def setup_group_show_network(self) -> None:
+		"""Turn off WiFi power saving and open the group-show ports if a
+		firewall is active."""
+		staged = os.path.join(tempfile.gettempdir(), "99-animatronic-wifi-powersave.conf")
+		try:
+			with open(staged, "w") as f:
+				f.write(self.WIFI_POWERSAVE_CONTENT)
+			subprocess.check_call(["sudo", "cp", staged, self.WIFI_POWERSAVE_CONF])
+			print(f"WiFi power saving disabled in {self.WIFI_POWERSAVE_CONF}.")
+			# Not restarting NetworkManager here: that drops the connection,
+			# and setup is often run over SSH. It applies on the next boot.
+			print("Reboot for the WiFi power setting to take effect. Check afterwards "
+			      "with: iw dev <interface> get power_save  (run 'iw dev' for the name)")
+		except (subprocess.CalledProcessError, OSError) as e:
+			print(f"Could not write {self.WIFI_POWERSAVE_CONF}: {e}")
+		finally:
+			if os.path.exists(staged):
+				os.remove(staged)
+
+		if shutil.which("ufw") is None:
+			return
+		result = subprocess.run(["sudo", "ufw", "status"], capture_output=True, text=True)
+		if "Status: active" not in result.stdout:
+			return
+		for port in self.GROUP_SHOW_UDP_PORTS:
+			try:
+				subprocess.check_call(["sudo", "ufw", "allow", f"{port}/udp"])
+			except subprocess.CalledProcessError as e:
+				print(f"Could not open UDP {port} in ufw: {e}")
+		print("Firewall: opened UDP " + ", ".join(str(p) for p in self.GROUP_SHOW_UDP_PORTS) + ".")
 
 	def setup_bashrc(self) -> None:
 		"""Add required environment variables to ~/.bashrc if not already present."""
