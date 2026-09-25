@@ -1,3 +1,5 @@
+import gzip
+import json
 import os
 import socket
 import threading
@@ -32,6 +34,11 @@ app.config['CSS_FILE']   = 'assets/css/kermit.css'
 app.config['MAX_CONTENT_LENGTH'] = 256 * 1024 * 1024
 # Set by WebServer.set_upload_handler once the show uploader exists.
 app.config['UPLOAD_HANDLER'] = None
+# Group-show endpoints, set by WebServer.set_peer_handlers.
+app.config['PEER_INFO_HANDLER'] = None
+app.config['PEER_PUSH_HANDLER'] = None
+app.config['PEER_SESSION_HANDLER'] = None
+app.config['PEER_SPEECH_HANDLER'] = None
 
 # Use threading mode for async
 socketio = SocketIO(app, async_mode='threading', ping_timeout=30, logger=False, engineio_logger=False)
@@ -93,6 +100,63 @@ class WebServer:
 			return jsonify({'success': False, 'message': str(e)}), 500
 
 		return jsonify(result), 200 if result.get('success') else 400
+
+	@app.route('/peer/info', methods=['GET'])
+	def peer_info() -> Response:
+		"""This character's identity and the notes/channels it owns."""
+		handler = app.config.get('PEER_INFO_HANDLER')
+		if handler is None:
+			return jsonify({'error': 'Peer networking is not available.'}), 503
+		return jsonify(handler())
+
+	@app.route('/peer/show', methods=['POST'])
+	def peer_show() -> Response:
+		"""A host pushing a group show. The body is gzipped JSON."""
+		handler = app.config.get('PEER_PUSH_HANDLER')
+		if handler is None:
+			return jsonify({'accepted': False, 'reason': 'unavailable'}), 503
+		try:
+			body = request.get_data()
+			if request.headers.get('Content-Encoding', '').lower() == 'gzip':
+				body = gzip.decompress(body)
+			payload = json.loads(body.decode('utf-8'))
+		except Exception as e:
+			log.warning(f"Peer show: unreadable push from {request.remote_addr}: {e}")
+			return jsonify({'accepted': False, 'reason': 'unreadable'}), 400
+		try:
+			result = handler(payload, request.remote_addr)
+		except Exception as e:
+			log.exception(f"Peer show: handler error: {e}")
+			return jsonify({'accepted': False, 'reason': 'error'}), 500
+		return jsonify(result), 200
+
+	@app.route('/peer/speech', methods=['POST'])
+	def peer_speech() -> Response:
+		"""Another character's LLM response, or word that it finished
+		speaking a line of one."""
+		handler = app.config.get('PEER_SPEECH_HANDLER')
+		if handler is None:
+			return jsonify({'ok': False, 'reason': 'unavailable'}), 503
+		payload = request.get_json(silent=True)
+		if not isinstance(payload, dict):
+			return jsonify({'ok': False, 'reason': 'unreadable'}), 400
+		try:
+			return jsonify(handler(payload, request.remote_addr)), 200
+		except Exception as e:
+			log.exception(f"Peer speech: handler error: {e}")
+			return jsonify({'ok': False, 'reason': 'error'}), 500
+
+	@app.route('/peer/session', methods=['GET'])
+	def peer_session() -> Response:
+		"""The show this character is hosting right now, for a peer that
+		heard a heartbeat but missed the push."""
+		handler = app.config.get('PEER_SESSION_HANDLER')
+		payload = handler() if handler is not None else None
+		if payload is None:
+			return jsonify({'error': 'Not hosting a show.'}), 404
+		body = gzip.compress(json.dumps(payload, separators=(',', ':')).encode('utf-8'))
+		return Response(body, status=200, mimetype='application/json',
+			headers={'Content-Encoding': 'gzip'})
 
 	@socketio.on('onConnect')
 	def connect_event(msg: Any) -> None:
@@ -181,6 +245,14 @@ class WebServer:
 		"""Register the callable that writes an uploaded show to storage. It
 		is called on the HTTP thread and returns the result dict verbatim."""
 		app.config['UPLOAD_HANDLER'] = handler
+
+	def set_peer_handlers(self, info_handler, push_handler, session_handler, speech_handler) -> None:
+		"""Register the peer callables (group shows and speech). All run on
+		HTTP threads."""
+		app.config['PEER_INFO_HANDLER'] = info_handler
+		app.config['PEER_PUSH_HANDLER'] = push_handler
+		app.config['PEER_SESSION_HANDLER'] = session_handler
+		app.config['PEER_SPEECH_HANDLER'] = speech_handler
 
 	def run_http(self) -> None:
 		try:
