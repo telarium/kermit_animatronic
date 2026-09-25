@@ -9,6 +9,8 @@ import anthropic
 import requests
 from openai import OpenAI
 from pydispatch import dispatcher
+from utils import conversation_epoch, is_conversation_current
+from peer_network import get_all_characters
 import logger
 from logger import get_logger
 
@@ -84,9 +86,35 @@ class LLM:
 		" gently prompt them again or move on naturally."
 		" Write plain spoken text only. Use letters, numbers, and ordinary sentence"
 		" punctuation — periods, commas, question marks, exclamation points, apostrophes,"
-		" and hyphens. Apart from the [?] marker described above, never use asterisks,"
+		" and hyphens. Apart from the [?] marker described above, and any curly-brace"
+		" speaker tags you are told below that you may use, never use asterisks,"
 		" ampersands, brackets, quotation marks, emoji, markdown, or any other symbol."
 		" Spell symbols out as words instead: 'and' rather than '&', 'percent' rather than '%'."
+	)
+
+	# Appended to the cloud prompt only while other characters are on the
+	# network, followed by "Your name is ..." and one "Name: description" line
+	# per other character. Each {Name} tag starts a line spoken by that
+	# character; start.py broadcasts the full response so they can speak
+	# their lines in turn. The offline model never gets this: a 1.7B can't
+	# hold several voices and the tag format at once.
+	PEER_CONVERSATION_POSTFIX = (
+		" Other characters are here with you and can join the conversation."
+		" Most of the time, reply as yourself alone. Occasionally, when it fits naturally,"
+		" such as a joke that deserves a reaction, or a question you put to one of them,"
+		" you may write a short exchange that includes lines for them."
+		" If asked to involve that character in the conversation, always attempt to do so,"
+		" Unless the character is not in the list provided. Then mention that they aren't here right now."
+		" Start each of their lines with their exact name in curly braces, like {Name},"
+		" followed by what they say. Everything before the first tag is spoken by you."
+		" If you speak again after another character, start that line with your own name"
+		" in curly braces."
+		" Write each character's lines in their own voice and personality, as described below,"
+		" and keep every line to one or two sentences, with no more than four lines in total."
+		" Only use the exact names listed below, and never write lines for anyone else."
+		" Reply alone, with no lines for the others, when the user asked you something only"
+		" you should answer, or when you end with [?]: a reply that needs the user's answer"
+		" must be entirely yours."
 	)
 
 	def __init__(self) -> None:
@@ -147,7 +175,7 @@ class LLM:
 
 	def send(self, query: str) -> None:
 		"""Send a query to the LLM asynchronously so we never block the main thread."""
-		threading.Thread(target=self._send, args=(query,), daemon=True).start()
+		threading.Thread(target=self._send, args=(query, conversation_epoch()), daemon=True).start()
 
 	def clear_history(self) -> None:
 		"""Reset conversation history — call this to start a fresh conversation."""
@@ -181,11 +209,30 @@ class LLM:
 			turns = self.FALLBACK_HISTORY_TURNS
 		else:
 			messages = [{"role": "system",
-				"content": self._cloud_context() + self.CONTEXT_POSTFIX}]
+				"content": self._cloud_context() + self.CONTEXT_POSTFIX
+					+ self._peer_conversation_context()}]
 			turns = self.HISTORY_LIMIT
 		messages += list(history)[-turns * 2:]
 		messages.append({"role": "user", "content": user_text})
 		return messages
+
+	def _peer_conversation_context(self) -> str:
+		"""PEER_CONVERSATION_POSTFIX plus who's here, or "" when this
+		character is alone. Rebuilt per request, so characters coming and
+		going change the very next reply."""
+		characters = get_all_characters()
+		others = [c for c in characters if not c["is_self"]]
+		if not others:
+			return ""
+		me = next((c for c in characters if c["is_self"]), None)
+		lines = []
+		if me:
+			lines.append(f"Your name is {me['name']}.")
+		lines.append("The other characters here are:")
+		for c in others:
+			description = c["description"] or "No description given."
+			lines.append(f"{c['name']}: {description}")
+		return self.PEER_CONVERSATION_POSTFIX + "\n" + "\n".join(lines)
 
 	def _cloud_context(self) -> str:
 		"""LLMContextShort carries identity, LLMContext carries personality —
@@ -194,12 +241,19 @@ class LLM:
 		parts = [p for p in (self.llm_context_short, self.llm_context) if p]
 		return " ".join(parts)
 
-	def _send(self, query: str) -> None:
+	def _send(self, query: str, epoch: int) -> None:
+		# A show can start while this request is in flight. The request can't
+		# be cancelled, so its reply is checked against the epoch instead —
+		# BEFORE touching history, or clear_history() would be undone by the
+		# late reply writing the interrupted exchange straight back in.
 		dispatcher.send(signal="updateStatus", id="A.I. Responding To", value=query)
 
 		t0 = time.monotonic()
 		response = self._send_cloud(query)
 		if response is not None:
+			if not is_conversation_current(epoch):
+				log.info("LLM: conversation was cancelled, discarding the cloud reply.")
+				return
 			log.info(f"LLM: cloud replied in {time.monotonic() - t0:.1f}s.")
 			self._last_tier = "cloud"
 			self._history.append({"role": "user",      "content": query})
@@ -207,14 +261,20 @@ class LLM:
 			self._on_response(response)
 			return
 
+		if not is_conversation_current(epoch):
+			log.info("LLM: conversation was cancelled, skipping the offline attempt.")
+			return
+
 		t1 = time.monotonic()
-		response = self._send_fallback(query)
+		response = self._send_fallback(query, epoch)
 		if response is not None:
 			log.warning(f"LLM: cloud gave up after {t1 - t0:.1f}s; "
 			      f"offline replied in {time.monotonic() - t1:.1f}s.")
 			self._on_response(response)
 			return
 
+		if not is_conversation_current(epoch):
+			return
 		log.error("LLM: all providers failed — no response available.")
 		self._on_fail()
 
@@ -271,7 +331,7 @@ class LLM:
 
 		return None
 
-	def _send_fallback(self, query: str) -> Optional[str]:
+	def _send_fallback(self, query: str, epoch: Optional[int] = None) -> Optional[str]:
 		if not self._fallback_available and not self._health_check():
 			log.warning("LLM: offline model unavailable.")
 			return None
@@ -288,6 +348,9 @@ class LLM:
 			return None
 
 		text = self._strip_stray_marker(text)
+		if epoch is not None and not is_conversation_current(epoch):
+			log.info("LLM: conversation was cancelled, discarding the offline reply.")
+			return None
 		self._last_tier = "fallback"
 		self._fallback_history.append({"role": "user",      "content": query})
 		self._fallback_history.append({"role": "assistant", "content": text})
@@ -368,5 +431,7 @@ class LLM:
 			      "| grep -i offload).")
 
 	def _on_response(self, response: str) -> None:
-		dispatcher.send(signal="executeTTS", text=response)
+		# llmResponse rather than executeTTS: start.py broadcasts the full
+		# response to the other characters before it starts speaking.
+		dispatcher.send(signal="llmResponse", text=response)
 		dispatcher.send(signal="updateStatus", id="A.I. Responding", value=response)
