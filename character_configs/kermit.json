@@ -1,4 +1,8 @@
 {
+	"character_name": "Kermit the Frog",
+	"character_description": "Kermit the Frog from The Muppet Show.",
+	"busy_sound": "sounds/busy.wav",
+	"show_sync_offset_ms": 0,
 	"wakeword": {
 		"model": "lib/openwakeword/okay_ker_mit.onnx",
 		"description": "Okay Kermit"
