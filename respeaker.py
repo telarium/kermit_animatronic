@@ -77,20 +77,41 @@ REBOOT_GONE_TIMEOUT = 10.0
 REBOOT_BACK_TIMEOUT = 30.0
 
 
+# Per-transfer traces printed by some copies of xvf_host.py. The cloned copy
+# under lib/respeaker prints one for every write, and the LED breathing
+# animation writes 20 times a second.
+_XVF_TRACE_PREFIXES = ("WriteCMD", "ReadCMD")
+
+
+def _quiet_print(*args, **kwargs) -> None:
+	"""Stands in for print() inside xvf_host: drops the per-transfer traces
+	and sends anything else it prints to the log instead of stdout."""
+	message = " ".join(str(a) for a in args)
+	if message.startswith(_XVF_TRACE_PREFIXES):
+		return
+	if message.strip():
+		log.info(f"xvf_host: {message}")
+
+
 def _import_xvf_host():
 	"""xvf_host.py lives at the repo root; setup.py also clones a copy under
 	lib/respeaker. Resolved once, here, so every caller uses the same one."""
 	cloned = os.path.join(_BASE_DIR, "lib", "respeaker", "python_control", "xvf_host.py")
+	module = None
 	if os.path.isfile(cloned):
 		spec = importlib.util.spec_from_file_location("xvf_host", cloned)
 		module = importlib.util.module_from_spec(spec)
 		spec.loader.exec_module(module)
-		return module
-	try:
-		import xvf_host
-		return xvf_host
-	except ImportError:
-		return None
+	else:
+		try:
+			import xvf_host as module
+		except ImportError:
+			return None
+	# A module-level name shadows the builtin inside that module's functions,
+	# so this silences its print() calls without editing the file — the
+	# cloned copy would lose any edit the next time setup.py re-clones it.
+	module.print = _quiet_print
+	return module
 
 
 class ReSpeaker:
