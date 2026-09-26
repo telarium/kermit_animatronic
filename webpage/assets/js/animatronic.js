@@ -40,6 +40,7 @@ function isMobileDevice() {
 // Consolidated DOMContentLoaded Event Listener
 document.addEventListener('DOMContentLoaded', () => {
 	setupWifiPopupEvents();
+	setupPeerPopupEvents();
 	setupConfigPopupEvents();
 	setupHelpEvents();
 	setupModeCheckboxes();
@@ -1652,4 +1653,122 @@ function setupPasswordEnterKey() {
 	} else {
 		console.warn('WiFi Password input or Connect button not found!');
 	}
+}
+
+// -------------------------------------------------------------------------
+// Peers (other characters on the network)
+// -------------------------------------------------------------------------
+
+// [{name, description, ip, port, ping_ms}], this character excluded. Pushed by the backend
+// whenever a character appears or leaves, and every few seconds for ping.
+let peerList = [];
+
+socket.on('peersUpdated', (data) => {
+	peerList = Array.isArray(data) ? data : [];
+	updatePeerIndicator();
+	const popup = document.getElementById('peerPopup');
+	if (popup && popup.style.display !== 'none') {
+		populatePeerList();
+	}
+});
+
+function updatePeerIndicator() {
+	const indicator = document.getElementById('peerIndicator');
+	if (!indicator) return;
+	indicator.dataset.peers = peerList.length;
+	indicator.title = peerList.length === 0
+		? 'No other characters found'
+		: `${peerList.length} other character${peerList.length === 1 ? '' : 's'}`;
+}
+
+function setupPeerPopupEvents() {
+	const indicator = document.getElementById('peerIndicator');
+	const closeButton = document.getElementById('closePeerPopup');
+
+	if (indicator) {
+		indicator.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openPeerPopup();
+			}
+		});
+	} else {
+		console.warn('Peer indicator not found!');
+	}
+
+	if (closeButton) {
+		closeButton.addEventListener('click', closePeerPopup);
+	} else {
+		console.warn('Close Peer Popup button not found!');
+	}
+
+	setupOverlayDismiss(document.getElementById('peerPopup'), closePeerPopup, 'Peer Popup');
+}
+
+function openPeerPopup() {
+	populatePeerList();
+	const popup = document.getElementById('peerPopup');
+	if (popup) {
+		popup.style.display = 'flex';
+		markOverlayOpened(popup);
+	} else {
+		console.warn('Peer Popup element not found!');
+	}
+}
+
+function closePeerPopup() {
+	const popup = document.getElementById('peerPopup');
+	if (popup) {
+		popup.style.display = 'none';
+	}
+}
+
+/**
+ * Link to a peer's web UI. Port 80 is left off the URL.
+ * @param {{ip: string, port: number}} peer
+ * @returns {string}
+ */
+function peerUrl(peer) {
+	const port = Number(peer.port) || 80;
+	return port === 80 ? `http://${peer.ip}/` : `http://${peer.ip}:${port}/`;
+}
+
+function populatePeerList() {
+	const list = document.getElementById('peerList');
+	if (!list) return;
+	list.innerHTML = '';
+
+	if (peerList.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'peer-empty';
+		empty.textContent = 'No other characters found.';
+		list.appendChild(empty);
+		return;
+	}
+
+	peerList.forEach((peer) => {
+		// A real link, so it opens in a new tab however it's activated.
+		const item = document.createElement('a');
+		item.className = 'peer-item';
+		item.href = peerUrl(peer);
+		item.target = '_blank';
+		item.rel = 'noopener';
+		if (peer.description) {
+			item.title = peer.description;
+		}
+
+		const name = document.createElement('span');
+		name.className = 'peer-name';
+		name.textContent = peer.name;
+
+		const detail = document.createElement('span');
+		detail.className = 'peer-detail';
+		detail.textContent = peer.ping_ms === null || peer.ping_ms === undefined
+			? peer.ip
+			: `${peer.ip}, ${peer.ping_ms} ms ping`;
+
+		item.appendChild(name);
+		item.appendChild(detail);
+		list.appendChild(item);
+	});
 }

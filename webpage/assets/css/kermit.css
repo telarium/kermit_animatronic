@@ -434,8 +434,9 @@ hr {
 #helpIndicator {
     position: fixed;
     top: 0.75em;
-    /* Clears the gear: its own 0.75em inset plus the 20px icon and a gap. */
-    right: 2.6em;
+    /* Two slots in from the corner: the gear, then the peer icon, each a
+       20px icon plus a gap. */
+    right: 4.45em;
     z-index: 100;
     display: flex;
     align-items: center;
@@ -457,6 +458,84 @@ hr {
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
+}
+
+/* =========================================================
+   Peer indicator (upper-right, between help and the gear)
+   —————————————————————————————————————————————————————————
+   Full indicator opacity with other characters present;
+   dimmed to the WiFi indicator's unlit level with none.
+   ========================================================= */
+#peerIndicator {
+	position: fixed;
+	top: 0.75em;
+	/* Clears the gear: its own 0.75em inset plus the 20px icon and a gap. */
+	right: 2.6em;
+	z-index: 100;
+	display: flex;
+	align-items: center;
+	color: #ffffff;
+	opacity: 0.75;
+	cursor: pointer;
+	user-select: none;
+	transition: opacity 0.2s ease;
+}
+
+#peerIndicator[data-peers="0"] {
+	opacity: 0.25;
+}
+
+#peerIndicator:hover,
+#peerIndicator:focus-visible {
+	opacity: 1;
+}
+
+#peerIcon .peer-figure {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.peer-list {
+	max-height: 50vh;
+	overflow-y: auto;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 4px;
+	padding: 0.5em;
+	background-color: #122e09;
+}
+
+.peer-item {
+	display: block;
+	padding: 0.5em;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 4px;
+	color: #fff;
+	text-decoration: none;
+	cursor: pointer;
+}
+.peer-item:last-child { border-bottom: none; }
+.peer-item:hover,
+.peer-item:focus-visible { background-color: rgba(255, 255, 255, 0.1); }
+
+.peer-name {
+	display: block;
+	line-height: 1.3;
+}
+
+.peer-detail {
+	display: block;
+	font-size: 0.75em;
+	line-height: 1.3;
+	opacity: 0.65;
+}
+
+.peer-empty {
+	color: #fff;
+	text-align: center;
+	margin: 0.5em 0;
 }
 
 /* =========================================================

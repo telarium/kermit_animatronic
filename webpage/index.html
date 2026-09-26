@@ -35,6 +35,16 @@
             </svg>
         </div>
 
+		<!-- Peer indicator (upper-right, between help and the config gear).
+		     Dimmed while no other characters are on the network. -->
+		<div id="peerIndicator" data-peers="0" role="button" tabindex="0" title="Other characters"
+		     onclick="openPeerPopup(); return false;">
+			<svg id="peerIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+				<circle class="peer-figure" cx="12" cy="6.75" r="3.75" />
+				<path class="peer-figure" d="M4.5 21 a7.5 7.5 0 0 1 15 0 z" />
+			</svg>
+		</div>
+
         <!-- Config editor indicator (upper-right corner) -->
         <div id="configIndicator" role="button" tabindex="0" title="Configuration"
              onclick="openConfigPopup(); return false;">
@@ -157,6 +167,17 @@
                 </div>
             </div>
         </div>
+
+		<!-- Peer List Popup -->
+		<div id="peerPopup" class="popup-overlay" style="display: none;">
+			<div class="popup-content">
+				<button id="closePeerPopup" class="close-button">&times;</button>
+				<h2>Other Characters</h2>
+				<div id="peerList" class="peer-list">
+					<!-- Characters found on the network are populated here -->
+				</div>
+			</div>
+		</div>
 
         <!-- Config Editor Popup -->
         <div id="configPopup" class="popup-overlay" style="display: none;">
