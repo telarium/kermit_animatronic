@@ -6,6 +6,7 @@ import threading
 import time
 import numpy as np
 import sherpa_onnx
+from utils import conversation_epoch, is_conversation_current
 import mic_stream
 from pydispatch import dispatcher
 from logger import get_logger
@@ -171,7 +172,7 @@ class SpeechToText:
 
 		log.info(f"SpeechToText: listen_once called, _listening={self._listening}")
 		self._listen_thread = threading.Thread(
-			target=self._capture_and_transcribe, daemon=True
+			target=self._capture_and_transcribe, args=(conversation_epoch(),), daemon=True
 		)
 		self._listen_thread.start()
 
@@ -183,7 +184,7 @@ class SpeechToText:
 	# Internal
 	# -------------------------------------------------------------------------
 
-	def _capture_and_transcribe(self) -> None:
+	def _capture_and_transcribe(self, epoch: int) -> None:
 		self._listening = True
 		dispatcher.send(
 			signal="updateStatus", id="Voice Command Status", value="Listening..."
@@ -222,6 +223,10 @@ class SpeechToText:
 					self._recognizer.decode_stream(stream)
 
 			while True:
+				# A show took over: stop listening now rather than at the
+				# next endpoint or timeout.
+				if not is_conversation_current(epoch):
+					break
 				try:
 					chunk = q.get(timeout=0.5)
 				except queue.Empty:
@@ -300,6 +305,9 @@ class SpeechToText:
 		# start.py treats "" and "[SILENCE]" differently from real text, and
 		# llm_service.py's CONTEXT_POSTFIX has explicit handling for
 		# [SILENCE], so preserve that contract exactly.
+		if not is_conversation_current(epoch):
+			log.info("SpeechToText: conversation was cancelled, discarding the transcript.")
+			return
 		dispatcher.send(
 			signal="transcriptionResult", text=text if text else "[SILENCE]"
 		)
