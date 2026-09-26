@@ -16,18 +16,25 @@ One UDP socket (SYNC_PORT) carries everything timing-sensitive:
 	hb / end     — show heartbeats and show ends from a host. Not handled
 	               here; they are passed to the on_message callback.
 
+PeerConversation, at the end of this file, shares LLM responses between
+characters and coordinates who speaks which line of them.
+
 Clock offsets are between time.monotonic() on each machine. Nothing here
 depends on wall-clock time, so NTP state doesn't matter.
 """
 
 import collections
 import json
+import os
+import re
 import socket
 import threading
 import time
+import uuid
 from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
+from pydispatch import dispatcher
 
 from utils import get_local_ip
 from logger import get_logger
@@ -119,6 +126,42 @@ class Peer:
 _active: Optional["PeerNetwork"] = None
 
 
+# TESTING ONLY. Start with ANIMATRONIC_FAKE_PEERS=1 in the environment and
+# get_all_characters() adds these, as if they were on the network. They exist
+# nowhere else: not in the peer list or web UI, and nothing is sent to them.
+FAKE_PEERS_ENV = "ANIMATRONIC_FAKE_PEERS"
+_FAKE_CHARACTERS = [
+	{
+		"name": "Fozzie Bear",
+		"description": "Fozzie Bear from The Muppet Show, a stand-up comedian who tells "
+		               "terrible jokes, says 'Wocka wocka!', and is Kermit's best friend.",
+		"serial": "fake00000001",
+		"ip": "192.0.2.1",
+		"is_self": False,
+	},
+	{
+		"name": "Miss Piggy",
+		"description": "Miss Piggy from The Muppet Show, a glamorous diva who adores Kermit, "
+		               "speaks of herself as 'moi', and has a famous karate chop.",
+		"serial": "fake00000002",
+		"ip": "192.0.2.2",
+		"is_self": False,
+	},
+	{
+		"name": "Gonzo",
+		"description": "Gonzo the Great from The Muppet Show, a daredevil performance artist "
+		               "who loves chickens and bizarre stunts.",
+		"serial": "fake00000003",
+		"ip": "192.0.2.3",
+		"is_self": False,
+	},
+]
+
+
+def _fake_peers_enabled() -> bool:
+	return os.environ.get(FAKE_PEERS_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_all_characters(include_self: bool = True) -> List[dict]:
 	"""Every character on the network: [{name, description, serial, ip,
 	is_self}], this one first. Empty before peer networking has started.
@@ -126,7 +169,10 @@ def get_all_characters(include_self: bool = True) -> List[dict]:
 	network = _active
 	if network is None:
 		return []
-	return network.characters(include_self)
+	characters = network.characters(include_self)
+	if _fake_peers_enabled():
+		characters += [dict(c) for c in _FAKE_CHARACTERS]
+	return characters
 
 
 class PeerNetwork:
@@ -167,6 +213,9 @@ class PeerNetwork:
 	def start(self, ip: Optional[str], interface: Optional[str] = None) -> None:
 		global _active
 		_active = self
+		if _fake_peers_enabled():
+			log.warning(f"PeerNetwork: {FAKE_PEERS_ENV} is set — get_all_characters() includes "
+			      f"{len(_FAKE_CHARACTERS)} fake characters for testing.")
 		self.ip = ip
 		self.interface = interface
 		self._open_socket()
@@ -517,3 +566,211 @@ class PeerNetwork:
 			self.on_peers_changed(self.ui_list())
 		except Exception as e:
 			log.exception(f"PeerNetwork: on_peers_changed failed: {e}")
+
+
+# =============================================================================
+# Speaker lines — splitting a multi-character LLM response
+# =============================================================================
+#
+# When other characters are present, the LLM may write a short exchange:
+#
+#	Hi-ho! Should I tell a joke, Fozzie?
+#	{Fozzie Bear} Yes, I'd love to hear it!
+#	{Kermit the Frog} Never mind, I forgot.
+#
+# Each {Name} starts a new line spoken by that character. Text before the first
+# tag belongs to the character that got the response. Every character splits
+# the same text with this same function, so line numbers agree everywhere —
+# they are what the "spoken" broadcasts refer to.
+
+_SPEAKER_TAG_RE = re.compile(r"\{([^{}\n]+)\}")
+
+
+def split_speaker_lines(text: str, default_speaker: str) -> List[Tuple[str, str]]:
+	"""Split a response into [(speaker_name, line_text), ...] in order.
+	Leading untagged text is default_speaker's. Empty lines are dropped, so
+	a response that opens with a tag doesn't get an empty line 0."""
+	parts = _SPEAKER_TAG_RE.split(text or "")
+	lines: List[Tuple[str, str]] = []
+	lead = parts[0].strip()
+	if lead:
+		lines.append((default_speaker, lead))
+	for i in range(1, len(parts) - 1, 2):
+		name = parts[i].strip()
+		line = parts[i + 1].strip()
+		if name and line:
+			lines.append((name, line))
+	return lines
+
+
+def is_same_speaker(a: str, b: str) -> bool:
+	"""Speaker names from the LLM should match character_name exactly, but
+	case and stray spacing aren't worth failing over."""
+	return " ".join((a or "").split()).casefold() == " ".join((b or "").split()).casefold()
+
+
+# =============================================================================
+# PeerConversation — sharing LLM responses between characters
+# =============================================================================
+#
+# Groundwork for multi-character conversations. Two messages go to every other
+# character (never back to this one), POSTed to /peer/speech:
+#
+#	response — the full LLM text, sent the moment it arrives and BEFORE this
+#	           character starts speaking, so the others have the most time to
+#	           prepare (synthesize) any lines of theirs.
+#	spoken   — this character finished speaking a line, cleanly. Sent only if
+#	           playback completed; speech that was cut off never cues the next
+#	           speaker.
+#
+# Both carry the same utterance ID. "line" numbers the lines of a response from
+# 0, in the order they appear, as split by split_speaker_lines(). Each "{Name}"
+# in the text starts a new line spoken by that character; text before the first
+# brace is line 0, spoken by the character that got the response. So far only
+# line 0 is ever spoken, so "line" is always 0 — see the TODO(peer
+# conversation) notes below.
+#
+# Talks to the rest of the system only through signals: it listens for
+# llmResponse and voicePlaybackEvent, and speaks by dispatching executeTTS with
+# an utterance_id.
+
+
+class PeerConversation:
+	SPEECH_PATH = "/peer/speech"
+
+	def __init__(self, identity, peer_network: PeerNetwork,
+	             can_speak: Optional[Callable[[], bool]] = None) -> None:
+		self.identity = identity
+		self.peer_network = peer_network
+		# False while a show is running; responses are then ignored.
+		self.can_speak = can_speak or (lambda: True)
+
+		dispatcher.connect(self.on_llm_response, signal="llmResponse", sender=dispatcher.Any)
+		dispatcher.connect(self.on_voice_playback_event, signal="voicePlaybackEvent", sender=dispatcher.Any)
+
+	# -------------------------------------------------------------------------
+	# This character's responses
+	# -------------------------------------------------------------------------
+
+	def on_llm_response(self, text: str) -> None:
+		if not self.can_speak():
+			return
+		utterance_id = uuid.uuid4().hex[:12]
+
+		# The full text goes out first, tags and all, so the other characters
+		# have as long as possible to prepare their lines.
+		sent = self.peer_network.post_to_peers(self.SPEECH_PATH, {
+			"kind": "response",
+			"utterance": utterance_id,
+			"speaker": self._speaker(),
+			"text": text,
+		})
+		if sent:
+			log.info(f"Speech: sent response {utterance_id} to {sent} character(s).")
+
+		lines = split_speaker_lines(text, self.identity.name)
+		if not lines:
+			return
+		if len(lines) > 1:
+			log.info(f"Speech: {utterance_id} has {len(lines)} lines: "
+			      f"{', '.join(name for name, _ in lines)}")
+			for index, (name, line) in enumerate(lines):
+				who = "me" if is_same_speaker(name, self.identity.name) else name
+				log.info(f"Speech:   line {index} ({who}): {line}")
+
+		# This character speaks line 0 only. Its completion broadcasts
+		# "spoken" line 0, which is the next speaker's cue.
+		first_speaker, first_text = lines[0]
+		if not is_same_speaker(first_speaker, self.identity.name):
+			# TODO(peer conversation): the response opened with another
+			# character's tag, so line 0 isn't ours. Nothing is spoken here and
+			# nothing cues that character yet. Once receivers act on
+			# "response", they should start line 0 themselves when it's theirs.
+			log.warning(f"Speech: {utterance_id} opens with {first_speaker}'s line — "
+			      f"not speaking it here.")
+			return
+		dispatcher.send(signal="executeTTS", text=first_text, utterance_id=utterance_id)
+
+		# TODO(peer conversation): later lines of our own (a "{Kermit the
+		# Frog}" tag after another character's line) should be synthesized
+		# right now with TextToSpeech.synthesize() and cached by (utterance,
+		# line), then played when the "spoken" message for the line before
+		# arrives — the same path receivers use in _on_peer_speech.
+
+		# TODO(peer conversation): when lines follow ours, this character
+		# should stay quiet until the last line is spoken — no wakeword, no
+		# listening — so the user doesn't talk over the other characters.
+		# Right now start.py's on_voice_playback_event re-enables the wakeword
+		# as soon as line 0 finishes.
+
+	def on_voice_playback_event(self, bPlaying: bool, bCompleted: bool = False, tag: str = None) -> None:
+		# The tag is the utterance ID, set only for speech that came from an
+		# LLM response.
+		if not bPlaying and bCompleted and tag:
+			self.broadcast_spoken(tag)
+
+	def broadcast_spoken(self, utterance_id: str, line: int = 0) -> None:
+		sent = self.peer_network.post_to_peers(self.SPEECH_PATH, {
+			"kind": "spoken",
+			"utterance": utterance_id,
+			"line": line,
+			"speaker": self._speaker(),
+		})
+		if sent:
+			log.info(f"Speech: finished line {line} of {utterance_id}, told {sent} character(s).")
+
+	# -------------------------------------------------------------------------
+	# Other characters' messages
+	# -------------------------------------------------------------------------
+
+	def receive(self, payload: dict, source_ip: str) -> dict:
+		"""The /peer/speech handler. Runs on an HTTP thread."""
+		kind = payload.get("kind")
+		speaker = payload.get("speaker")
+		if kind not in ("response", "spoken") or not isinstance(speaker, dict) \
+				or not payload.get("utterance"):
+			log.warning(f"Speech: malformed message from {source_ip}.")
+			return {"ok": False, "reason": "malformed"}
+		if speaker.get("serial") == self.identity.serial:
+			# Our own message looped back somehow — never act on it.
+			return {"ok": True, "reason": "own message"}
+		self._on_peer_speech(payload)
+		return {"ok": True}
+
+	def _on_peer_speech(self, message: dict) -> None:
+		"""Another character's speech. Only logged for now — this is where
+		multi-character conversation logic goes."""
+		speaker = message.get("speaker", {}).get("name", "?")
+		if message.get("kind") == "response":
+			lines = split_speaker_lines(message.get("text", ""), speaker)
+			mine = [i for i, (name, _) in enumerate(lines) if is_same_speaker(name, self.identity.name)]
+			log.info(f"Speech: {speaker} got response {message.get('utterance')} "
+			      f"({len(lines)} line(s); mine: {mine or 'none'}): {message.get('text', '')!r}")
+			# TODO(peer conversation): for each line in `mine`, synthesize it
+			# now with TextToSpeech.synthesize() on a worker thread and cache
+			# the file by (utterance, line), so it's ready the moment its cue
+			# comes. If line 0 is ours (the response opened with our tag), play
+			# it straight away.
+		else:
+			log.info(f"Speech: {speaker} finished line {message.get('line')} "
+			      f"of {message.get('utterance')}.")
+			# TODO(peer conversation): if line + 1 of that utterance is ours,
+			# play the cached file (waiting for synthesis if it isn't done),
+			# tagged so its completion broadcasts "spoken" for line + 1.
+
+		# TODO(peer conversation), still to decide and build:
+		#	- Lines naming a character that isn't present (or a misspelled
+		#	  name) would stall the chain, since no one speaks them. Every
+		#	  character can see that line N has no owner on the network and
+		#	  treat it as already spoken.
+		#	- A cue that never arrives (a character went offline mid-
+		#	  conversation): time out, and delete the cached audio files.
+		#	- A show starting mid-conversation: drop pending lines and cached
+		#	  audio, and ignore conversation messages while performing in a
+		#	  group show.
+		#	- Should the other characters add the exchange to their own LLM
+		#	  history, so they remember what they said?
+		#	- Status in the web UI while a conversation is in progress.
+
+	def _speaker(self) -> dict:
+		return {"serial": self.identity.serial, "name": self.identity.name}
