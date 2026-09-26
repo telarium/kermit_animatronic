@@ -4,6 +4,10 @@ Holds the config-file (INI) read/write helpers used by the web-based config
 editor, and the USB/local storage resolution used at startup and whenever a
 drive is plugged in.
 
+Also holds the character's network identity (serial, display name, local
+address) used by group shows, and the conversation epoch that lets a show
+cancel a conversation already in flight.
+
 Storage rule: a USB drive carrying a valid config is the source of truth for
 both the config and the shows, and everything on it is backed up to the local
 directory next to start.py. With no drive attached, that local backup is used
@@ -12,9 +16,13 @@ then becomes the source of truth.
 """
 
 import glob
+import json
 import os
 import re
+import subprocess
+import threading
 import configparser
+from typing import Optional, Tuple
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -465,3 +473,214 @@ def write_config_values(path: str, updates: dict) -> None:
 	with open(tmp_path, 'w', newline='') as f:
 		f.writelines(out)
 	os.replace(tmp_path, path)
+
+
+# =============================================================================
+# Identity — who this character is on the network
+# =============================================================================
+#
+# The unique identity is the Jetson's hardware serial, read from the device
+# tree. It is burned into the module, so it survives reimaging and cloning —
+# unlike /etc/machine-id, which a cloned disk image would duplicate across every
+# character built from it.
+#
+# The display name comes from "character_name" in the character JSON. The mDNS
+# instance name combines the two ("Kermit the Frog (3f9a2c)") purely so that
+# avahi-browse and the logs are readable; software always keys on the serial.
+
+
+SERIAL_PATHS = (
+	"/proc/device-tree/serial-number",
+	"/sys/firmware/devicetree/base/serial-number",
+)
+
+# Used only if the device-tree serial can't be read.
+FALLBACK_MAC_INTERFACES = ("wlan0", "eth0")
+
+# The serial suffix shown in the instance name.
+SUFFIX_LENGTH = 6
+
+# DNS-SD instance names are a single DNS label: 63 bytes of UTF-8.
+MAX_INSTANCE_BYTES = 63
+
+# Interfaces that never carry the address other characters should use.
+# l4tbr0 is L4T's USB device-mode network bridge (usually 192.168.55.1),
+# reachable only over the USB cable. VPN interfaces (Tailscale, WireGuard,
+# ZeroTier, tun/tap) carry addresses other characters on the LAN can't reach.
+_SKIP_INTERFACE_PREFIXES = (
+	"lo", "l4tbr", "usb", "rndis", "docker", "veth", "br-", "virbr",
+	"tailscale", "wg", "zt", "tun", "tap",
+)
+# Preferred interface families, best first, matched by prefix. WiFi comes
+# first; on the Orin Nano it is often named wlP1p1s0 rather than wlan0.
+_PREFERRED_INTERFACE_PREFIXES = ("wl", "en", "eth")
+
+DEFAULT_NAME = "Animatronic"
+
+
+def _read_serial() -> Optional[str]:
+	for path in SERIAL_PATHS:
+		try:
+			with open(path, "rb") as f:
+				raw = f.read()
+		except OSError:
+			continue
+		# Device-tree strings are null-terminated.
+		serial = raw.replace(b"\x00", b"").decode("ascii", errors="ignore").strip()
+		serial = re.sub(r"[^A-Za-z0-9]", "", serial)
+		if serial:
+			return serial.lower()
+	return None
+
+
+def _read_mac() -> Optional[str]:
+	for iface in FALLBACK_MAC_INTERFACES:
+		# Prefer the permanent address — the current one can be randomized.
+		try:
+			result = subprocess.run(["ethtool", "-P", iface],
+				capture_output=True, text=True, timeout=2)
+			match = re.search(r"([0-9a-f]{2}(:[0-9a-f]{2}){5})", result.stdout.lower())
+			if match and match.group(1) != "00:00:00:00:00:00":
+				return match.group(1).replace(":", "")
+		except Exception:
+			pass
+		try:
+			with open(f"/sys/class/net/{iface}/address") as f:
+				mac = f.read().strip().lower().replace(":", "")
+			if mac and mac != "000000000000":
+				return mac
+		except OSError:
+			continue
+	return None
+
+
+class Identity:
+	def __init__(self, hardware_path: Optional[str]) -> None:
+		config = self._read_config(hardware_path)
+		self.name: str = self._read_name(config)
+		self.description: str = str(config.get("character_description", "") or "").strip()
+		self.serial: str = self._resolve_serial()
+		self.instance_name: str = self._build_instance_name(self.name, self.serial)
+		log.info(f"Identity: '{self.name}', serial {self.serial}, "
+		      f"instance '{self.instance_name}'")
+
+	@property
+	def short_serial(self) -> str:
+		return self.serial[-SUFFIX_LENGTH:]
+
+	@staticmethod
+	def _read_config(hardware_path: Optional[str]) -> dict:
+		if not hardware_path:
+			return {}
+		try:
+			with open(hardware_path, "r") as f:
+				config = json.load(f)
+			return config if isinstance(config, dict) else {}
+		except (OSError, ValueError) as e:
+			log.exception(f"Identity: could not read character config '{hardware_path}': {e}")
+			return {}
+
+	@staticmethod
+	def _read_name(config: dict) -> str:
+		name = str(config.get("character_name", "") or "").strip()
+		if name:
+			return name
+		log.warning(f"Identity: no character_name in the character JSON, using '{DEFAULT_NAME}'.")
+		return DEFAULT_NAME
+
+	@staticmethod
+	def _resolve_serial() -> str:
+		serial = _read_serial()
+		if serial:
+			return serial
+		mac = _read_mac()
+		if mac:
+			log.warning("Identity: device-tree serial unreadable — using the WiFi MAC instead.")
+			return mac
+		log.error("Identity: no serial or MAC available — using a placeholder. "
+		      "Two characters in this state will collide.")
+		return "000000"
+
+	@staticmethod
+	def _build_instance_name(name: str, serial: str) -> str:
+		suffix = f" ({serial[-SUFFIX_LENGTH:]})"
+		# Dots have to be escaped in DNS labels and several tools show them
+		# badly, so drop them ("Dr. Teeth" -> "Dr Teeth").
+		base = re.sub(r"\s+", " ", name.replace(".", "")).strip() or DEFAULT_NAME
+		budget = MAX_INSTANCE_BYTES - len(suffix.encode("utf-8"))
+		while len(base.encode("utf-8")) > budget:
+			base = base[:-1]
+		return base.rstrip() + suffix
+
+
+def get_local_ip() -> Tuple[Optional[str], Optional[str]]:
+	"""Return (ip, interface) for the address other characters should use,
+	or (None, None). WiFi first, then Ethernet, then anything else that isn't
+	loopback, the USB bridge, or a container interface."""
+	try:
+		result = subprocess.run(["ip", "-o", "-4", "addr", "show"],
+			capture_output=True, text=True, timeout=5)
+	except Exception as e:
+		log.exception(f"Identity: could not list interfaces: {e}")
+		return None, None
+
+	found = {}
+	for line in result.stdout.splitlines():
+		parts = line.split()
+		if len(parts) < 4 or parts[2] != "inet":
+			continue
+		iface = parts[1]
+		ip = parts[3].split("/")[0]
+		if iface.startswith(_SKIP_INTERFACE_PREFIXES) or ip.startswith("127."):
+			continue
+		found.setdefault(iface, ip)
+
+	for prefix in _PREFERRED_INTERFACE_PREFIXES:
+		for iface in sorted(found):
+			if iface.startswith(prefix):
+				return found[iface], iface
+	for iface in sorted(found):
+		return found[iface], iface
+	return None, None
+
+
+# =============================================================================
+# Conversation epoch — cancelling a conversation already in flight
+# =============================================================================
+#
+# A conversation is spread across several threads: STT listens, the LLM thinks,
+# TTS synthesizes, and each one dispatches the next step when it finishes. None
+# of them can be cancelled mid-flight, so a show starting while Kermit is mid-
+# sentence would otherwise have a late LLM reply spoken over the song.
+#
+# The epoch is a counter bumped whenever a conversation is cancelled. Each step
+# records the epoch it started under and checks it again before dispatching its
+# result. If the epoch has moved on, the result is stale and is dropped quietly —
+# no speech, no history, no status update.
+
+
+_conversation_lock = threading.Lock()
+_conversation_epoch = 0
+
+
+def conversation_epoch() -> int:
+	"""The epoch a new conversation step should record when it starts."""
+	with _conversation_lock:
+		return _conversation_epoch
+
+
+def cancel_conversation(reason: str = "") -> int:
+	"""Cancel the conversation in flight. Every step started before this call
+	will drop its result. Returns the new epoch."""
+	global _conversation_epoch
+	with _conversation_lock:
+		_conversation_epoch += 1
+		value = _conversation_epoch
+	log.info(f"Conversation: cancelled{f' ({reason})' if reason else ''}, epoch now {value}.")
+	return value
+
+
+def is_conversation_current(epoch: int) -> bool:
+	"""True if a step started under `epoch` may still dispatch its result."""
+	with _conversation_lock:
+		return epoch == _conversation_epoch
