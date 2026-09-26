@@ -12,6 +12,7 @@ import wave
 import requests
 from pydispatch import dispatcher
 from typing import List, Optional
+from utils import conversation_epoch, is_conversation_current
 import logger
 from logger import get_logger
 
@@ -144,10 +145,43 @@ class TextToSpeech:
 			return maximum
 		return float(raw)
 
-	def speak(self, text: str, bForceOffline: bool = False) -> None:
-		"""Convert text to speech asynchronously. bForceOffline skips
-		ElevenLabs entirely and goes straight to the Piper voice."""
-		threading.Thread(target=self._speak, args=(text, bForceOffline), daemon=True).start()
+	def speak(self, text: str, bForceOffline: bool = False, utterance_id: Optional[str] = None) -> None:
+		"""Convert text to speech asynchronously and play it. bForceOffline
+		skips ElevenLabs entirely and goes straight to the Piper voice.
+		utterance_id, if given, travels with the audio to the voice player so
+		the end of playback can be matched to the LLM response it came from."""
+		threading.Thread(
+			target=self._speak, args=(text, bForceOffline, conversation_epoch(), utterance_id), daemon=True
+		).start()
+
+	def synthesize(self, text: str, bForceOffline: bool = False) -> Optional[str]:
+		"""Synthesize text to an audio file WITHOUT playing it, and return the
+		file's path (None if nothing speakable or no voice worked). Blocks for
+		the length of the synthesis, so call it from a worker thread.
+
+		This is what lets a character prepare its line of a multi-character
+		conversation as soon as the full response arrives, then play it the
+		moment its turn comes instead of waiting on ElevenLabs then."""
+		raw = text
+		text = sanitize_for_speech(text)
+		if text != raw:
+			log.info(f"TextToSpeech: sanitized -> {text!r}")
+		if not text:
+			log.info("TextToSpeech: nothing speakable left after sanitizing.")
+			return None
+		started = time.monotonic()
+		path = None
+		if not bForceOffline:
+			path = self._synthesize_elevenlabs(text)
+			if path is None:
+				log.warning("TextToSpeech: falling back to the offline voice.")
+		if path is None:
+			path = self._synthesize_piper_file(text)
+		if path is None:
+			log.warning("TextToSpeech: no voice available — nothing synthesized.")
+			return None
+		log.info(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
+		return path
 
 	def warm_up(self) -> None:
 		"""Load the Piper voice and push a short phrase through it, so the
@@ -189,33 +223,22 @@ class TextToSpeech:
 				except OSError:
 					pass
 
-	def _speak(self, text: str, bForceOffline: bool = False) -> None:
-		raw = text
-		text = sanitize_for_speech(text)
-		if text != raw:
-			log.info(f"TextToSpeech: sanitized -> {text!r}")
-		if not text:
-			log.info("TextToSpeech: nothing speakable left after sanitizing.")
-			return
-		started = time.monotonic()
-		if not bForceOffline:
-			if self._speak_elevenlabs(text):
-				log.info(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
-				return
-			log.warning("TextToSpeech: falling back to the offline voice.")
-		if not self._speak_piper(text):
-			log.warning("TextToSpeech: no voice available — nothing spoken.")
-			return
-		log.info(f"TextToSpeech: synthesis took {time.monotonic() - started:.1f}s.")
+	def _speak(self, text: str, bForceOffline: bool = False, epoch: Optional[int] = None,
+	           utterance_id: Optional[str] = None) -> None:
+		# Synthesis takes seconds and can't be cancelled. The epoch decides,
+		# once the audio exists, whether it is still wanted.
+		path = self.synthesize(text, bForceOffline)
+		if path is not None:
+			self._dispatch_playback(path, epoch, utterance_id)
 
-	def _speak_elevenlabs(self, text: str) -> bool:
-		"""Returns True only if audio was produced and dispatched."""
+	def _synthesize_elevenlabs(self, text: str) -> Optional[str]:
+		"""Returns the saved audio file's path, or None if ElevenLabs failed."""
 		if not self.elevenlabs_key:
 			log.warning("TextToSpeech: no ElevenLabs API key set.")
-			return False
+			return None
 		if not self.elevenlabs_voice_id:
 			log.warning("TextToSpeech: no ElevenLabs voice ID set.")
-			return False
+			return None
 
 		try:
 			response = requests.post(
@@ -244,16 +267,23 @@ class TextToSpeech:
 			tmp.write(response.content)
 			tmp.close()
 
-			dispatcher.send(signal="playVoiceFile", file=tmp.name)
-
 			log.info(f"TextToSpeech: audio saved to {tmp.name}")
-			return True
+			return tmp.name
 
 		except requests.HTTPError as e:
 			log.exception(f"TextToSpeech: HTTP error from ElevenLabs: {e}")
 		except Exception as e:
 			log.exception(f"TextToSpeech: request failed: {e}")
-		return False
+		return None
+
+	def _dispatch_playback(self, path: str, epoch: Optional[int], utterance_id: Optional[str] = None) -> None:
+		"""Hand the synthesized file to the voice player, unless a show has
+		cancelled the conversation while it was being made. Either way the
+		audio counts as produced, so no fallback voice is tried."""
+		if epoch is not None and not is_conversation_current(epoch):
+			log.info("TextToSpeech: conversation was cancelled, not playing the reply.")
+			return
+		dispatcher.send(signal="playVoiceFile", file=path, utterance_id=utterance_id)
 
 	def _find_piper_files(self) -> Optional[tuple]:
 		"""Locate (model.onnx, voice.json) in the configured directory."""
@@ -386,11 +416,11 @@ class TextToSpeech:
 			log.warning("TextToSpeech: installed piper-tts is too old for piper.volume — ignoring it.")
 		voice.synthesize(text, wav_file, length_scale=self.piper_speed)
 
-	def _speak_piper(self, text: str) -> bool:
-		"""Returns True only if audio was produced and dispatched."""
+	def _synthesize_piper_file(self, text: str) -> Optional[str]:
+		"""Returns the saved audio file's path, or None if Piper failed."""
 		voice = self._load_piper_voice()
 		if voice is None:
-			return False
+			return None
 
 		try:
 			tmp = tempfile.NamedTemporaryFile(
@@ -400,10 +430,8 @@ class TextToSpeech:
 			with wave.open(tmp.name, "wb") as wav_file:
 				self._synthesize_piper_spaced(voice, text, wav_file)
 
-			dispatcher.send(signal="playVoiceFile", file=tmp.name)
-
 			log.info(f"TextToSpeech: offline audio saved to {tmp.name}")
-			return True
+			return tmp.name
 		except Exception as e:
 			log.exception(f"TextToSpeech: Piper synthesis failed: {e}")
-			return False
+			return None
