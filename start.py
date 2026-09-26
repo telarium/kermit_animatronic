@@ -79,9 +79,11 @@ from voice_player import VoicePlayer
 from animation_controller import AnimationController
 from led_controller import LEDController
 from animatronic_movements import Movement
-from show_player import ShowPlayer
+from show_player import GroupShowManager, ShowPlayer
 from show_upload import ShowUploader
 from wifi_management import WifiManagement
+from utils import Identity, cancel_conversation, get_local_ip
+from peer_network import PeerConversation, PeerNetwork
 
 # Restore stderr now that all noisy imports are done
 os.dup2(_old_stderr, 2)
@@ -122,6 +124,10 @@ class Kermit:
 		self._config_data: dict = {}
 		self._key_map: list = []
 		self.shows_dir: str = os.path.join(_BASE_DIR, utils.SHOWS_DIRNAME)
+		# None, "host" (playing a show of our own, shared with peers) or
+		# "peer" (performing in another character's show).
+		self._show_mode = None
+		self._peer_list: list = []
 
 		# Resolve where the config and shows live (USB-first, bootstrapping
 		# from the template if needed) before anything reads them. The
@@ -135,9 +141,11 @@ class Kermit:
 			logger.flush()
 			sys.exit(1)
 		hardware = _load_hardware_config(self.config_path)
+		self.identity = Identity(hardware['_path'])
 
 		logger.log_boot_banner(
 			_BASE_DIR,
+			identity=f"{self.identity.name} ({self.identity.serial})",
 			character=hardware.get('_path', 'unknown'),
 			config=f"{self.config_path} ({'USB' if using_usb else 'local backup'})",
 			shows=self.shows_dir,
@@ -151,6 +159,7 @@ class Kermit:
 		animation_dir   = os.path.join(_BASE_DIR, hardware.get('animation_directory', ''))
 		hardware_path   = hardware['_path']
 		html_config     = hardware.get('html', {})
+		busy_sound      = str(hardware.get('busy_sound', '') or '').strip()
 
 		# Initialize components
 		self.wakeword = WakeWord(model_path=wakeword_model, description=wakeword_desc)
@@ -164,12 +173,45 @@ class Kermit:
 		self.web_server = WebServer(html_config)
 		self.wifi_management = WifiManagement()
 		self.show_player = ShowPlayer(pygame)
+		self.show_player.set_busy_sound(os.path.join(_BASE_DIR, busy_sound) if busy_sound else "")
 		self.show_uploader = ShowUploader(_BASE_DIR, hardware_path)
 		self.voiceCommandHandler = VoiceCommandHandler(self.wifi_management, self.show_player)
 
 		# Uploads come in over HTTP rather than the socket, so the web server
 		# needs the handler directly instead of a dispatcher signal.
 		self.web_server.set_upload_handler(self.on_show_upload)
+
+		# Group shows: discovery + clock sync, and the session manager that
+		# hosts our shows and performs in other characters'.
+		self.peer_network = PeerNetwork(
+			self.identity,
+			on_peers_changed=self.on_peers_changed,
+			on_peer_added=lambda peer: self.group_show.on_peer_added(peer),
+			on_message=lambda message, address: self.group_show.on_message(message, address),
+		)
+		self.group_show = GroupShowManager(
+			self.identity,
+			self.peer_network,
+			hardware_path,
+			is_hosting=lambda: self._show_mode == "host",
+			on_join=self.on_group_show_join,
+			on_leave=self.on_group_show_leave,
+		)
+		# Shares LLM responses with the other characters and coordinates who
+		# speaks which line. Ignores responses while a show is running.
+		self.peer_conversation = PeerConversation(
+			self.identity,
+			self.peer_network,
+			can_speak=lambda: self._show_mode is None,
+		)
+		self.web_server.set_peer_handlers(
+			self.group_show.info,
+			self.group_show.receive_push,
+			self.group_show.session_payload,
+			self.peer_conversation.receive,
+		)
+		ip, interface = get_local_ip()
+		self.peer_network.start(ip, interface)
 
 		self.set_dispatch_events()
 		self.wakeword.set_enabled(True)
@@ -349,6 +391,16 @@ class Kermit:
 			if self.show_player:
 				self.show_player.stop_show()
 
+			# Tell peers the show is over and send the mDNS goodbye, so other
+			# characters drop us straight away rather than on a timeout.
+			group_show = getattr(self, "group_show", None)
+			if group_show:
+				group_show.stop_hosting()
+				group_show.leave("shutting down")
+			peer_network = getattr(self, "peer_network", None)
+			if peer_network:
+				peer_network.stop()
+
 			if self.stt:
 				self.stt.shutdown()
 
@@ -399,21 +451,114 @@ class Kermit:
 		self.web_server.broadcast('showListLoaded', show_list)
 
 	def on_show_status(self, status: str, show_name: str = "") -> None:
+		if self._show_mode == "peer":
+			# Performing in another character's show: that host owns the
+			# transport. A request to play something else gets the busy
+			# sound; pause and stop are simply ignored.
+			if status == "play":
+				log.info(f"Show: busy performing in {self.group_show.performing_for()}'s show, "
+				      f"ignoring request to play '{show_name}'.")
+				self.show_player.play_busy_sound()
+			self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
+			return
+
 		self._prev_show_status = status
 		self.web_server.broadcast('showStatusUpdated', status)
 		if status == "play":
+			resuming = (self.show_player.paused and self.show_player.active_show_name is not None
+			            and show_name == self.show_player.active_show_name)
+			if resuming:
+				# load_show unpauses a paused show of the same name. The
+				# heartbeat carries the resume to peers.
+				self.show_player.load_show(show_name)
+				self.wakeword.set_enabled(False)
+				return
+
+			self.enter_show_mode("host", f"playing '{show_name or 'a random show'}'")
 			self.show_player.load_show(show_name)
+			# Also covers replacing a paused show, when the wakeword was on.
 			self.wakeword.set_enabled(False)
+			if not self.show_player.is_active():
+				log.warning(f"Show: '{show_name}' did not start.")
+				self.group_show.stop_hosting()
+				self.exit_show_mode()
+				self._prev_show_status = "stop"
+				self.web_server.broadcast('showStatusUpdated', "stop")
+				return
+			# Starting over a show we're already hosting replaces it; peers
+			# switch to the new session.
+			self.group_show.start_hosting(
+				self.show_player.active_show_name,
+				self.show_player.show_type_name(),
+				self.show_player.show_events,
+				self.show_player.get_state,
+			)
 		elif status == "pause":
+			if self._show_mode != "host":
+				return
 			self.show_player.toggle_pause()
-			self.wakeword.set_enabled(True)
+			# pause is a toggle: listen while paused, not after resuming.
+			self.wakeword.set_enabled(self.show_player.paused)
 		elif status == "stop":
 			self.show_player.stop_show()
+			self.group_show.stop_hosting()
 			self.movements.reset_all()
-			self.wakeword.set_enabled(True)
+			self.exit_show_mode()
 		elif status == "end":
-			self.wakeword.set_enabled(True)
+			self.group_show.stop_hosting()
 			self.movements.reset_all()
+			self.exit_show_mode()
+
+	# -------------------------------------------------------------------------
+	# Show mode
+	# -------------------------------------------------------------------------
+
+	def enter_show_mode(self, mode: str, reason: str) -> None:
+		"""A show always takes over from a conversation. Cancel everything the
+		conversation has in flight, clear the LLM history, and get the
+		movements, LEDs and mic into a clean state before the show starts."""
+		previous = self._show_mode
+		self._show_mode = mode
+		if previous is not None:
+			# Already in a show (a host replacing its own): nothing to cancel.
+			return
+
+		log.info(f"Show mode: entering as {mode} — {reason}.")
+		cancel_conversation(reason)
+		self._awaiting_followup = False
+		self.llm.clear_history()
+		self.voice_player.stop()
+		dispatcher.send(signal="animationStop")
+		self.movements.reset_all(b_notify=True)
+		self.wakeword.set_enabled(False)
+		self.led_controller.set_state(LEDController.STATE_OFF)
+		mic_stream.set_muted(False)
+
+	def exit_show_mode(self, enable_wakeword: bool = True) -> None:
+		if self._show_mode is None:
+			return
+		log.info(f"Show mode: leaving ({self._show_mode}).")
+		self._show_mode = None
+		self.movements.reset_all(b_notify=True)
+		if enable_wakeword:
+			self.wakeword.set_enabled(True)
+
+	def on_group_show_join(self, info: dict) -> None:
+		"""Another character's show has notes for us. Runs on the HTTP thread
+		the host's push arrived on."""
+		host = info.get("host_name", "another character")
+		show = info.get("show", "")
+		self.enter_show_mode("peer", f"performing '{show}' with {host}")
+		self.on_update_status("Group Show", f"Performing '{show}' with {host}")
+
+	def on_group_show_leave(self, reason: str) -> None:
+		if self._show_mode != "peer":
+			return
+		self.exit_show_mode()
+
+	def on_peers_changed(self, peers: list) -> None:
+		self._peer_list = peers
+		self.web_server.broadcast('peersUpdated', peers)
 
 	def on_connect_event(self, client_ip: str) -> None:
 		log.info(f"Web client connected from IP: {client_ip}")
@@ -423,6 +568,7 @@ class Kermit:
 		self.web_server.broadcast('showStatusUpdated', self._prev_show_status)
 		self.web_server.broadcast('configLoaded', self._config_data)
 		self.web_server.broadcast('keyMapLoaded', self._key_map)
+		self.web_server.broadcast('peersUpdated', self._peer_list)
 		self.on_update_status(self._prev_status_id, self._prev_status_value)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
@@ -436,7 +582,17 @@ class Kermit:
 		self.web_server.broadcast('movementKeyActivated', {"key": str(key).lower(), "on": bool(on)})
 
 	def on_wakeword_event(self) -> None:
+		if self._show_mode == "peer":
+			return
 		self.led_controller.set_state(LEDController.STATE_LISTENING)
+		if self._show_mode == "host":
+			# Only reachable while paused — the wakeword is off during
+			# playback. Talking ends the show for everyone.
+			self.show_player.stop_show()
+			self.group_show.stop_hosting()
+			self.exit_show_mode(enable_wakeword=False)
+			self._prev_show_status = "stop"
+			self.web_server.broadcast('showStatusUpdated', "stop")
 		def handle():
 			self.show_player.stop_show()
 			audio_setup.wake_dac_if_needed(pygame)
@@ -447,6 +603,13 @@ class Kermit:
 		threading.Thread(target=handle, daemon=True).start()
 
 	def on_transcription_result(self, text: str) -> None:
+		if self._show_mode is not None:
+			# Typed from the web UI during a show (the wakeword is off, so
+			# nothing is spoken). Commands still work — "stop", or a play
+			# request that gets the busy sound — but nothing goes to the LLM.
+			if text and text != "[SILENCE]" and not self.voiceCommandHandler.parse(text):
+				log.info(f"Heard '{text}' during a show — not a command, ignoring.")
+			return
 		if not text or text == "[SILENCE]":
 			if self._awaiting_followup:
 				self._awaiting_followup = False
@@ -476,8 +639,11 @@ class Kermit:
 	# marker to be spoken and the follow-up never triggered.
 	_TRAILING_MARKER_RE = re.compile(r"\s*\[\s*\?\s*\]\s*[.!?,]*\s*$")
 
-	def on_execute_text_to_speech(self, text: str, bForceOffline: bool = False) -> None:
-		"""bForceOffline bypasses ElevenLabs and speaks with the Piper voice."""
+	def on_execute_text_to_speech(self, text: str, bForceOffline: bool = False,
+	                              utterance_id: str = None) -> None:
+		"""bForceOffline bypasses ElevenLabs and speaks with the Piper voice.
+		utterance_id marks speech that came from an LLM response, so its
+		completion can be broadcast."""
 		match = self._TRAILING_MARKER_RE.search(text)
 		if match:
 			self._awaiting_followup = True
@@ -486,16 +652,32 @@ class Kermit:
 		else:
 			self._awaiting_followup = False
 			log.info(f"Response: {text}")
-		self.tts.speak(text, bForceOffline)
+		self.tts.speak(text, bForceOffline, utterance_id)
 
-	def on_voice_play(self, file: str) -> None:
+	def on_voice_play(self, file: str, utterance_id: str = None) -> None:
+		if self._show_mode is not None:
+			# Voice shares mixer.music with the song, and would puppeteer
+			# over the show's movements.
+			log.info(f"VoicePlayer: not speaking during a show ('{os.path.basename(file)}').")
+			return
 		dispatcher.send(signal="animationStart", name="speaking", bStartAtRandomTime=True, bLoop=True)
-		self.voice_player.play(file)
+		self.voice_player.play(file, tag=utterance_id)
 
 	def on_voice_play_sequence(self, fileList) -> None:
+		if self._show_mode is not None:
+			log.info("VoicePlayer: not speaking during a show.")
+			return
 		self.voice_player.play_sequence(fileList)
 
 	def on_voice_playback_event(self, bPlaying: bool) -> None:
+		# Completion of LLM speech (bCompleted/tag) is PeerConversation's
+		# business; it listens to this same signal.
+		if self._show_mode is not None:
+			# Speech was cut off by a show starting. Only the mic needs
+			# putting right; no follow-up, no wakeword, no LED change.
+			if not bPlaying:
+				mic_stream.set_muted(False)
+			return
 		if bPlaying:
 			mic_stream.set_muted(True)
 			self.led_controller.set_state(LEDController.STATE_OFF)
