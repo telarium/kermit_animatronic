@@ -52,6 +52,17 @@ BEAM_CHANNEL = 0
 # than growing without bound or blocking the reader for everyone else.
 _MIC_QUEUE_CHUNKS = 64
 
+# Reopen backoff. When the ReSpeaker gets into a bad state it can accept an
+# open and then fail the stream within milliseconds, over and over. Reopening
+# every 0.5s turned one bad minute into 40+ open/cancel cycles, and every
+# cancel of in-flight USB audio transfers runs through the xHCI code path that
+# has crashed the kernel (xhci_invalidate_cancelled_tds) on 5.15.199. Back off
+# exponentially instead: 1, 2, 4, 8, 16, 30, 30... seconds between attempts.
+_REOPEN_DELAY_MIN = 1.0
+_REOPEN_DELAY_MAX = 30.0
+# A stream that stays up this long counts as healthy and resets the backoff.
+_STABLE_SECONDS = 10.0
+
 _mic_lock = threading.Lock()
 _mic = None
 
@@ -185,8 +196,12 @@ class _MicStream:
 		import numpy as np
 
 		chunk_bytes = MIC_CHUNK_FRAMES * 2 * DEVICE_CHANNELS
+		# Consecutive drops without a healthy stream in between. Drives the
+		# reopen backoff and is reset once a stream survives _STABLE_SECONDS.
+		failures = 0
 		while not self._stop.is_set():
 			proc = None
+			opened_at: Optional[float] = None
 			try:
 				device = find_capture_device()
 				proc = subprocess.Popen(
@@ -201,13 +216,18 @@ class _MicStream:
 					stdout=subprocess.PIPE,
 					stderr=subprocess.DEVNULL,
 				)
+				opened_at = time.monotonic()
 				log.info(f"Mic: shared capture started on {device} "
-				      f"({DEVICE_CHANNELS}ch, reading beam {BEAM_CHANNEL}, pid={proc.pid})")
+					f"({DEVICE_CHANNELS}ch, reading beam {BEAM_CHANNEL}, pid={proc.pid})")
 
 				while not self._stop.is_set():
 					raw = proc.stdout.read(chunk_bytes)
 					if not raw or len(raw) < chunk_bytes:
 						break  # arecord died — fall through and reopen
+
+					if failures and time.monotonic() - opened_at >= _STABLE_SECONDS:
+						log.info(f"Mic: capture stable again after {failures} failed attempt(s).")
+						failures = 0
 
 					if self._muted:
 						continue
@@ -247,11 +267,21 @@ class _MicStream:
 						except Exception:
 							pass
 
-			if not self._stop.is_set():
-				# Covers the ReSpeaker being unplugged and replugged: rediscover
-				# the device on the next pass rather than dying permanently.
-				log.warning("Mic: capture dropped, reopening...")
-				time.sleep(0.5)
+			if self._stop.is_set():
+				break
+
+			# Covers the ReSpeaker being unplugged and replugged: rediscover the
+			# device on the next pass rather than dying permanently — but back off
+			# so a device stuck in a bad state isn't hammered with reopens.
+			ran_for = time.monotonic() - opened_at if opened_at is not None else 0.0
+			if ran_for >= _STABLE_SECONDS:
+				failures = 0
+			failures += 1
+			delay = min(_REOPEN_DELAY_MIN * (2 ** (failures - 1)), _REOPEN_DELAY_MAX)
+			log.warning(f"Mic: capture dropped after {ran_for:.1f}s, "
+				f"reopening in {delay:.0f}s (attempt {failures})...")
+			# Event.wait instead of sleep so shutdown isn't held up by a long backoff.
+			self._stop.wait(delay)
 
 		log.info("Mic: shared capture stopped.")
 
