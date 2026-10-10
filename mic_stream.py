@@ -20,6 +20,7 @@ one place the two planes have to agree.
 """
 
 import collections
+import os
 import queue
 import re
 import subprocess
@@ -63,6 +64,33 @@ _REOPEN_DELAY_MAX = 30.0
 # A stream that stays up this long counts as healthy and resets the backoff.
 _STABLE_SECONDS = 10.0
 
+# Mic-loss watchdog. Reboots only when BOTH are true:
+#   1. no audio has arrived for _WATCHDOG_TIMEOUT, and
+#   2. the kernel's USB hub thread (a kworker running usb_hub_wq) has been
+#      stuck in uninterruptible sleep (state D) for _HUB_STUCK_TIMEOUT.
+# Condition 2 is the signature of the 5.15.199 hang: a ReSpeaker disconnect
+# leaves the hub thread blocked in usb_kill_urb forever, so no USB device can
+# come or go until a reboot. Someone simply unplugging the ReSpeaker (or never
+# fitting one) leaves the hub thread idle, so the mic is optional and an
+# unplug never causes a reboot.
+_WATCHDOG_ENABLED = True
+_WATCHDOG_TIMEOUT = 180.0
+_WATCHDOG_POLL = 10.0
+# If the graceful reboot hasn't happened after this long (stuck USB processes
+# can block shutdown), force it.
+_WATCHDOG_FORCE_AFTER = 90.0
+# The hub thread is briefly in state D during every normal connect/disconnect;
+# a real hang keeps it there indefinitely.
+_HUB_STUCK_TIMEOUT = 60.0
+# Reboot-loop guard. Counts consecutive watchdog reboots in a small file; after
+# this many in a row without the mic coming back, stop rebooting and stay up
+# (deaf, but reachable). The count resets once the mic is healthy for a while.
+_WATCHDOG_MAX_REBOOTS = 3
+_WATCHDOG_RESET_AFTER = 600.0
+_WATCHDOG_STATE_FILE = os.path.join(
+	os.path.dirname(os.path.abspath(__file__)), "logs", ".mic_watchdog_reboots"
+)
+
 _mic_lock = threading.Lock()
 _mic = None
 
@@ -101,6 +129,13 @@ class _MicStream:
 		)
 		self._ring_lock = threading.Lock()
 		self._anchor: float = 0.0
+		# Last time a full chunk was read from arecord (muted or not). Drives
+		# the mic-loss watchdog.
+		self._last_audio: float = time.monotonic()
+		self._healthy_since: Optional[float] = None
+		# When the USB hub thread was first seen stuck (None = not stuck).
+		self._hub_stuck_since: Optional[float] = None
+		self._watchdog: Optional[threading.Thread] = None
 		# Gate for the animatronic's own voice. The stream stays open (arecord must keep
 		# being drained or its pipe fills and it dies) but captured audio is
 		# discarded rather than buffered or delivered.
@@ -112,8 +147,12 @@ class _MicStream:
 		if self._thread and self._thread.is_alive():
 			return
 		self._stop.clear()
+		self._last_audio = time.monotonic()
 		self._thread = threading.Thread(target=self._reader, daemon=True)
 		self._thread.start()
+		if _WATCHDOG_ENABLED and not (self._watchdog and self._watchdog.is_alive()):
+			self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
+			self._watchdog.start()
 
 	def stop(self) -> None:
 		self._stop.set()
@@ -225,6 +264,10 @@ class _MicStream:
 					if not raw or len(raw) < chunk_bytes:
 						break  # arecord died — fall through and reopen
 
+					# Audio is flowing. Recorded before the mute check: muted
+					# audio still proves the device and USB path are alive.
+					self._last_audio = time.monotonic()
+
 					if failures and time.monotonic() - opened_at >= _STABLE_SECONDS:
 						log.info(f"Mic: capture stable again after {failures} failed attempt(s).")
 						failures = 0
@@ -284,6 +327,133 @@ class _MicStream:
 			self._stop.wait(delay)
 
 		log.info("Mic: shared capture stopped.")
+
+	# -- watchdog --
+
+	def _watchdog_loop(self) -> None:
+		"""Reboot the system if the mic has been silent for _WATCHDOG_TIMEOUT.
+
+		Runs in its own thread so it still fires when the reader thread is
+		blocked inside a stuck arecord read.
+		"""
+		while not self._stop.wait(_WATCHDOG_POLL):
+			now = time.monotonic()
+			silent_for = now - self._last_audio
+
+			if silent_for < _WATCHDOG_POLL * 2:
+				# Healthy. After a sustained healthy stretch, clear the
+				# reboot-loop counter so a future hang gets its full budget.
+				if self._healthy_since is None:
+					self._healthy_since = now
+				elif now - self._healthy_since >= _WATCHDOG_RESET_AFTER:
+					if _read_reboot_count():
+						_write_reboot_count(0)
+						log.info("Mic watchdog: mic healthy, reboot counter cleared.")
+					self._healthy_since = now
+				continue
+
+			self._healthy_since = None
+
+			# Track how long the USB hub thread has been stuck. Checked even
+			# before the timeout so the stuck time is measured accurately.
+			if _usb_hub_stuck():
+				if self._hub_stuck_since is None:
+					self._hub_stuck_since = now
+			else:
+				self._hub_stuck_since = None
+
+			if silent_for < _WATCHDOG_TIMEOUT:
+				continue
+			if self._hub_stuck_since is None or now - self._hub_stuck_since < _HUB_STUCK_TIMEOUT:
+				# Mic is gone but USB is healthy: it was unplugged or never
+				# fitted. Not our problem — keep running without it.
+				continue
+
+			count = _read_reboot_count()
+			if count >= _WATCHDOG_MAX_REBOOTS:
+				log.error(f"Mic watchdog: no audio for {silent_for:.0f}s, but already "
+					f"rebooted {count} times in a row — not rebooting again. "
+					f"Check the ReSpeaker connection.")
+				# Re-arm quietly so this doesn't log every poll.
+				self._last_audio = now
+				continue
+
+			_write_reboot_count(count + 1)
+			log.critical(f"Mic watchdog: no audio for {silent_for:.0f}s and the USB hub "
+				f"has been stuck for {now - self._hub_stuck_since:.0f}s — USB is "
+				f"wedged. Rebooting (watchdog reboot {count + 1}/"
+				f"{_WATCHDOG_MAX_REBOOTS}).")
+			_reboot_system()
+			return
+
+
+def _usb_hub_stuck() -> bool:
+	"""True if a kworker running the USB hub workqueue is in state D.
+
+	The kernel shows the workqueue in a worker's name, e.g.
+	'kworker/0:3+usb_hub_wq'. State D (uninterruptible sleep) for a long
+	stretch means it is blocked — the USB hang this watchdog exists for.
+	"""
+	try:
+		pids = [p for p in os.listdir("/proc") if p.isdigit()]
+	except OSError:
+		return False
+	for pid in pids:
+		try:
+			with open(f"/proc/{pid}/stat") as f:
+				stat = f.read()
+		except OSError:
+			continue
+		# Format: pid (comm) state ... — comm may contain spaces/parens.
+		lpar, rpar = stat.find("("), stat.rfind(")")
+		if lpar < 0 or rpar < 0:
+			continue
+		comm = stat[lpar + 1:rpar]
+		if "usb_hub_wq" in comm and stat[rpar + 2:rpar + 3] == "D":
+			return True
+	return False
+
+
+def _read_reboot_count() -> int:
+	try:
+		with open(_WATCHDOG_STATE_FILE) as f:
+			return int(f.read().strip() or 0)
+	except (OSError, ValueError):
+		return 0
+
+
+def _write_reboot_count(count: int) -> None:
+	try:
+		with open(_WATCHDOG_STATE_FILE, "w") as f:
+			f.write(f"{count}\n")
+			f.flush()
+			os.fsync(f.fileno())
+	except OSError as e:
+		log.warning(f"Mic watchdog: could not write {_WATCHDOG_STATE_FILE}: {e}")
+
+
+def _run_reboot(args: list) -> bool:
+	"""Run a reboot command as-is, then via passwordless sudo if that fails."""
+	for cmd in (args, ["sudo", "-n"] + args):
+		try:
+			if subprocess.run(cmd, timeout=15).returncode == 0:
+				return True
+		except Exception as e:
+			log.warning(f"Mic watchdog: {' '.join(cmd)} failed: {e}")
+	return False
+
+
+def _reboot_system() -> None:
+	"""Graceful reboot, then a forced one if stuck USB processes block shutdown."""
+	os.sync()
+	if _run_reboot(["systemctl", "reboot"]):
+		time.sleep(_WATCHDOG_FORCE_AFTER)
+		log.critical("Mic watchdog: graceful reboot stalled — forcing.")
+	os.sync()
+	# -ff: reboot immediately without waiting on services, which is exactly
+	# what hangs when processes are stuck on the wedged USB hub.
+	if not _run_reboot(["systemctl", "reboot", "-ff"]):
+		log.error("Mic watchdog: could not reboot (no permission?). Staying up.")
 
 
 def _get_mic() -> _MicStream:
