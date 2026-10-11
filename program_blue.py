@@ -24,6 +24,10 @@ Handshake:
 	CMD 'W' (0x57) — status/version query    → 0x00 0x00 0x6C 0x4D
 	CMD 'M' (0x4D) — start status stream     → 0x18 0x00 0x00, then keep
 	                                           streaming at STREAM_HZ
+	CMD 'K' (0x4B) — same as 'M'. Seen when starting a new show: ProgramBlue
+	                 sends Y, W, then K (not M) and goes straight into
+	                 all-zero keepalive frames. Unanswered, it waits ~2.4s
+	                 on every frame and the whole UI crawls.
 
 	The stream is required — without it ProgramBlue's playback crawls.
 	send() must not flush(): tcdrain blocks on USB-serial, and doing it
@@ -70,11 +74,13 @@ NUM_CHANNELS  = 16		# Channels encoded as bits across bytes 1-2
 CMD_IDENTIFY = 0x59		# 'Y' — identification query
 CMD_STATUS   = 0x57		# 'W' — status/version query
 CMD_STREAM   = 0x4D		# 'M' — start/continue status stream
+CMD_STREAM_K = 0x4B		# 'K' — also starts the status stream (new-show path)
 
 CMD_NAMES = {
 	CMD_IDENTIFY: "Y identify",
 	CMD_STATUS:   "W status",
 	CMD_STREAM:   "M stream",
+	CMD_STREAM_K: "K stream",
 }
 
 IDENTIFY_RESP = bytes([0x53, 0x50, 0x32])		# "SP2"
@@ -109,6 +115,11 @@ class ProgramBlue:
 
 		# Track last known channel states to only dispatch on changes
 		self._channel_states: list[int] = [0] * NUM_CHANNELS
+
+		# Unrecognized bytes seen between frames. Each value is logged the
+		# first time it appears — an unknown command ProgramBlue expects an
+		# answer to otherwise vanishes silently into the discard count.
+		self._unknown_seen: set[int] = set()
 
 		self._open_port()
 
@@ -247,6 +258,12 @@ class ProgramBlue:
 		if not self._rx_buf and byte in CMD_NAMES:
 			self._handle_command(byte)
 			return
+		if not self._rx_buf and byte != FRAME_START and byte not in self._unknown_seen:
+			self._unknown_seen.add(byte)
+			ch = chr(byte) if 32 <= byte < 127 else "?"
+			log.warning(f"ProgramBlue: unrecognized byte 0x{byte:02X} ('{ch}') between "
+				f"frames — discarded. If ProgramBlue stalls, it may be a command "
+				f"that needs a reply.")
 		self._rx_buf.append(byte)
 		self._try_parse_frame()
 
@@ -263,7 +280,7 @@ class ProgramBlue:
 			self.send(IDENTIFY_RESP)
 		elif cmd == CMD_STATUS:
 			self.send(STATUS_RESP)
-		elif cmd == CMD_STREAM:
+		elif cmd in (CMD_STREAM, CMD_STREAM_K):
 			self._streaming = True
 			self.send(STREAM_RESP)
 
