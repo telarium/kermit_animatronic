@@ -6,6 +6,7 @@ import difflib
 import socket
 import fcntl
 import struct
+import re
 from typing import Optional, List, Dict
 from pydispatch import dispatcher
 import logger
@@ -21,6 +22,10 @@ class WifiManagement:
 		self._monitor_thread: Optional[threading.Thread] = None
 		self._stop_monitor = threading.Event()
 		self._cached_networks: List[Dict] = []
+		# Only one scan runs at a time. A second request while one is in
+		# flight is dropped: its results would be the same, and NetworkManager
+		# refuses back-to-back rescans anyway.
+		self._scan_lock = threading.Lock()
 
 		self._start_disconnect_monitor()
 
@@ -60,7 +65,11 @@ class WifiManagement:
 	def scan(self) -> None:
 		"""Trigger a WiFi scan in a background thread.
 		Dispatches 'wifiScanComplete' with a list of dicts: [{ssid, signal_strength}]
-		when finished."""
+		when finished. If a scan is already running, this request is folded
+		into it — that scan's results are broadcast to everyone anyway."""
+		if self._scan_lock.locked():
+			log.info("WifiManagement: scan already in progress, not starting another.")
+			return
 		threading.Thread(target=self._do_scan, daemon=True).start()
 
 	def get_ip(self) -> str:
@@ -167,28 +176,15 @@ class WifiManagement:
 	# -------------------------------------------------------------------------
 
 	def _do_scan(self) -> None:
-		log.info("WifiManagement: _do_scan started")
+		if not self._scan_lock.acquire(blocking=False):
+			return
 		try:
 			log.info("WifiManagement: scanning...")
-			result = subprocess.run(
-				["nmcli", "--terse", "-f", "SSID,SIGNAL,IN-USE", "dev", "wifi", "list", "--rescan", "yes"],
-				capture_output=True, text=True, timeout=30
-			)
-			networks: List[Dict] = []
-			seen = set()
-			for line in result.stdout.splitlines():
-				parts = line.split(":", 2)
-				if len(parts) < 3:
-					continue
-				ssid = parts[0].strip()
-				signal = parts[1].strip()
-				if not ssid or ssid in seen:
-					continue
-				seen.add(ssid)
-				try:
-					networks.append({"ssid": ssid, "signal_strength": int(signal)})
-				except ValueError:
-					pass
+			networks = self._list_networks(rescan=True)
+			if networks is None:
+				# The rescan was refused or failed. Fall back to what NM
+				# already has cached rather than reporting an empty list.
+				networks = self._list_networks(rescan=False) or []
 
 			networks.sort(key=lambda x: x["signal_strength"], reverse=True)
 			self._cached_networks = networks
@@ -196,7 +192,65 @@ class WifiManagement:
 			dispatcher.send(signal="wifiScanComplete", networks=networks)
 		except Exception as e:
 			log.exception(f"WifiManagement: scan error: {e}")
-			dispatcher.send(signal="wifiScanComplete", networks=[])
+			dispatcher.send(signal="wifiScanComplete", networks=list(self._cached_networks))
+		finally:
+			self._scan_lock.release()
+
+	def _list_networks(self, rescan: bool) -> Optional[List[Dict]]:
+		"""Ask NetworkManager for visible networks, strongest signal per SSID.
+		Returns None if nmcli reported an error (e.g. a refused rescan)."""
+		result = subprocess.run(
+			["nmcli", "--terse", "-f", "SSID,SIGNAL", "dev", "wifi", "list",
+				"--rescan", "yes" if rescan else "no"],
+			capture_output=True, text=True, timeout=30
+		)
+		if result.returncode != 0:
+			log.warning(f"WifiManagement: nmcli wifi list (rescan={rescan}) failed "
+				f"with code {result.returncode}: {result.stderr.strip()}")
+			return None
+		if result.stderr.strip():
+			log.info(f"WifiManagement: nmcli wifi list said: {result.stderr.strip()}")
+
+		best: Dict[str, int] = {}
+		for line in result.stdout.splitlines():
+			fields = self._split_terse(line)
+			if len(fields) < 2:
+				continue
+			ssid = fields[0].strip()
+			if not ssid:
+				# Hidden network — nothing to show or connect to by name.
+				continue
+			try:
+				signal = int(fields[1])
+			except ValueError:
+				log.warning(f"WifiManagement: could not parse nmcli line: {line!r}")
+				continue
+			# The same SSID often appears once per band; keep the strongest.
+			if signal > best.get(ssid, -1):
+				best[ssid] = signal
+		return [{"ssid": ssid, "signal_strength": signal} for ssid, signal in best.items()]
+
+	@staticmethod
+	def _split_terse(line: str) -> List[str]:
+		"""Split one line of 'nmcli --terse' output into fields.
+		nmcli escapes ':' and '\\' inside values with a backslash, so a plain
+		split(':') breaks any SSID containing a colon."""
+		fields: List[str] = []
+		current = []
+		escaped = False
+		for ch in line:
+			if escaped:
+				current.append(ch)
+				escaped = False
+			elif ch == "\\":
+				escaped = True
+			elif ch == ":":
+				fields.append("".join(current))
+				current = []
+			else:
+				current.append(ch)
+		fields.append("".join(current))
+		return fields
 
 	# -------------------------------------------------------------------------
 	# Internal: connecting
@@ -206,7 +260,15 @@ class WifiManagement:
 		# Resolve fuzzy match against currently visible networks
 		target_ssid = self._fuzzy_match_ssid(ssid_query)
 		if not target_ssid:
+			# NM's cached list may be stale — a phone hotspot in particular
+			# only advertises while its settings screen is open. Rescan once
+			# and try again before giving up.
+			log.info(f"WifiManagement: '{ssid_query}' not in cached list, rescanning...")
+			self._do_scan()
+			target_ssid = self._fuzzy_match_ssid(ssid_query)
+		if not target_ssid:
 			log.warning(f"WifiManagement: no match found for '{ssid_query}'")
+			dispatcher.send(signal="playVoiceFile", file="wifi_not_found.ogg")
 			return
 
 		# Already connected to this network — do nothing
@@ -351,13 +413,22 @@ class WifiManagement:
 				["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list"],
 				capture_output=True, text=True, timeout=10
 			)
-			return [
-				line.strip() for line in result.stdout.splitlines()
-				if line.strip()
-			]
+			ssids = []
+			for line in result.stdout.splitlines():
+				ssid = self._split_terse(line)[0].strip()
+				if ssid and ssid not in ssids:
+					ssids.append(ssid)
+			return ssids
 		except Exception as e:
 			log.exception(f"WifiManagement: error listing visible SSIDs: {e}")
 			return []
+
+	@staticmethod
+	def _normalize_ssid(name: str) -> str:
+		"""Fold an SSID or spoken name into comparable form: lowercase, with
+		punctuation and spacing removed. Speech-to-text hears 'Langley-Phone'
+		as 'langley phone'; both become 'langleyphone'."""
+		return re.sub(r"[^a-z0-9]+", "", name.lower())
 
 	def _fuzzy_match_ssid(self, query: str) -> Optional[str]:
 		"""Find the best-matching SSID from visible networks using difflib."""
@@ -365,18 +436,28 @@ class WifiManagement:
 		if not candidates:
 			return None
 
-		# Exact match first (case-insensitive)
+		norm_query = self._normalize_ssid(query)
+		if not norm_query:
+			return None
+		by_norm: Dict[str, str] = {}
 		for ssid in candidates:
-			if ssid.lower() == query.lower():
-				return ssid
+			norm = self._normalize_ssid(ssid)
+			if norm and norm not in by_norm:
+				by_norm[norm] = ssid
 
-		matches = difflib.get_close_matches(query, candidates, n=1, cutoff=0.4)
+		# Exact match after normalizing
+		if norm_query in by_norm:
+			return by_norm[norm_query]
+
+		matches = difflib.get_close_matches(norm_query, list(by_norm.keys()), n=1, cutoff=0.6)
 		if matches:
-			return matches[0]
+			log.info(f"WifiManagement: fuzzy matched '{query}' to '{by_norm[matches[0]]}'")
+			return by_norm[matches[0]]
 
 		# Last resort: substring match
-		for ssid in candidates:
-			if query.lower() in ssid.lower() or ssid.lower() in query.lower():
+		for norm, ssid in by_norm.items():
+			if norm_query in norm or norm in norm_query:
+				log.info(f"WifiManagement: substring matched '{query}' to '{ssid}'")
 				return ssid
 
 		return None
