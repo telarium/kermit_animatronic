@@ -57,6 +57,7 @@ class Setup:
 		self.setup_openwakeword_models()
 		self.setup_respeaker()
 		self.setup_pl2303()
+		self.setup_f_midi()
 		self.setup_bashrc()
 
 	def install_packages(self, packages: List[str]) -> None:
@@ -445,6 +446,212 @@ WantedBy=multi-user.target
 		print(f"pl2303: added '{real_user}' to dialout group — re-login required to take effect.")
 
 		print("pl2303: done.")
+
+	# ─── USB MIDI gadget (usb_f_midi) ─────────────────────────────────────────
+
+	# The interface string Windows (and Cakewalk) show as the MIDI port name.
+	# Stock f_midi.c says "MIDI function"; the build below patches it to this.
+	# This is NOT set by midi.py — its "product" string is a different field.
+	F_MIDI_INTERFACE_NAME = "Animatronic MIDI"
+	F_MIDI_STOCK_NAME     = "MIDI function"
+	F_MIDI_SOURCE_URL = (
+		"https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/"
+		"drivers/usb/gadget/{path}?h=linux-{series}.y"
+	)
+	# u_f.h lives one directory up from the function sources in the kernel
+	# tree. Fetching it from function/ returns an empty file and the build
+	# fails on a missing header.
+	F_MIDI_SOURCES = {
+		"f_midi.c": "function/f_midi.c",
+		"u_midi.h": "function/u_midi.h",
+		"u_f.h":    "u_f.h",
+	}
+	# NVIDIA's USB device-mode service binds the only UDC at boot, leaving
+	# nothing for the MIDI gadget. JetPack upgrades re-enable it.
+	L4T_USB_DEVICE_MODE_SERVICE = "nv-l4t-usb-device-mode.service"
+
+	def setup_f_midi(self) -> None:
+		"""Install usb_f_midi.ko for the running kernel, with the port name
+		patched to F_MIDI_INTERFACE_NAME.
+
+		The stock Tegra kernel ships without CONFIG_USB_CONFIGFS_F_MIDI, so the
+		module is built out of tree. A module only loads on the exact kernel it
+		was built for, so every JetPack kernel update needs this re-run:
+
+			python3 -c "from setup import Setup; Setup.setup_f_midi(Setup.__new__(Setup))"
+
+		Order of preference: the module already installed (if it matches this
+		kernel and carries the patched name), then the copy in lib/f_midi/
+		(same checks), then a fresh build from the upstream stable sources.
+		"""
+		import platform
+		script_dir   = os.path.dirname(os.path.abspath(__file__))
+		repo_copy    = os.path.join(script_dir, "lib", "f_midi", "usb_f_midi.ko")
+		kernel_ver   = platform.release()
+		install_dir  = f"/lib/modules/{kernel_ver}/kernel/drivers/usb/gadget/function"
+		install_path = os.path.join(install_dir, "usb_f_midi.ko")
+
+		self._disable_l4t_usb_device_mode()
+
+		if self._f_midi_module_ok(install_path, kernel_ver):
+			print(f"f_midi: patched module already installed for {kernel_ver}, skipping build.")
+		elif self._f_midi_module_ok(repo_copy, kernel_ver):
+			print(f"f_midi: installing the copy in lib/f_midi/ (built for {kernel_ver}).")
+			self._install_f_midi(repo_copy, install_dir, install_path)
+		else:
+			built = self._build_f_midi(kernel_ver)
+			if built is None:
+				print("f_midi: MIDI over USB-C will not be available until this succeeds.")
+				return
+			self._install_f_midi(built, install_dir, install_path)
+			# Keep a copy in the repo so a reinstall on this kernel needs no
+			# network. Failure here doesn't affect the running install.
+			try:
+				os.makedirs(os.path.dirname(repo_copy), exist_ok=True)
+				shutil.copy2(built, repo_copy)
+				print(f"f_midi: saved a copy to {repo_copy}.")
+			except OSError as e:
+				print(f"f_midi: could not save a copy to lib/f_midi/ ({e}) — not fatal.")
+			finally:
+				shutil.rmtree(os.path.dirname(built), ignore_errors=True)
+
+		print("f_midi: loading modules...")
+		try:
+			subprocess.check_call(["sudo", "modprobe", "libcomposite"])
+			subprocess.check_call(["sudo", "modprobe", "usb_f_midi"])
+		except subprocess.CalledProcessError as e:
+			print(f"f_midi: modprobe failed — {e}. Check: sudo dmesg | tail")
+			return
+
+		print("f_midi: done. Reboot, then the gadget comes up when the app starts.")
+		print("f_midi: on Windows, uninstall the old MIDI device in Device Manager "
+		      "(View > Show hidden devices) and replug, or the old name stays cached.")
+
+	@staticmethod
+	def _module_vermagic(path: str) -> Optional[str]:
+		try:
+			result = subprocess.run(
+				["modinfo", "-F", "vermagic", path],
+				capture_output=True, text=True, check=True,
+			)
+		except (subprocess.CalledProcessError, OSError):
+			return None
+		fields = result.stdout.split()
+		return fields[0] if fields else None
+
+	def _f_midi_module_ok(self, path: str, kernel_ver: str) -> bool:
+		"""True if path is a usb_f_midi.ko for this kernel with the patched
+		name. A module that loads but still says "MIDI function" is NOT ok —
+		that is exactly the regression the last kernel update caused."""
+		if not os.path.isfile(path):
+			return False
+		vermagic = self._module_vermagic(path)
+		if vermagic != kernel_ver:
+			print(f"f_midi: {path} is built for {vermagic or 'an unknown kernel'}, "
+			      f"not {kernel_ver}.")
+			return False
+		try:
+			with open(path, "rb") as f:
+				patched = self.F_MIDI_INTERFACE_NAME.encode() in f.read()
+		except OSError:
+			return False
+		if not patched:
+			print(f"f_midi: {path} matches the kernel but still uses the stock "
+			      f"port name '{self.F_MIDI_STOCK_NAME}'.")
+		return patched
+
+	def _build_f_midi(self, kernel_ver: str) -> Optional[str]:
+		"""Download, patch and build usb_f_midi.ko. Returns the path of the
+		built module (inside a temp dir the caller removes), or None."""
+		headers = f"/lib/modules/{kernel_ver}/build"
+		if not os.path.exists(headers):
+			print(f"f_midi: no kernel headers at {headers}. Install them "
+			      "(sudo apt install nvidia-l4t-kernel-headers) and re-run.")
+			return None
+		headers = os.path.realpath(headers)
+
+		# "5.15.199-tegra" -> "5.15", the stable branch the Tegra kernel tracks.
+		series = ".".join(kernel_ver.split("-")[0].split(".")[:2])
+		build_dir = tempfile.mkdtemp(prefix="usb_f_midi_")
+		print(f"f_midi: building for {kernel_ver} from linux-{series}.y sources in {build_dir}...")
+
+		try:
+			for name, path in self.F_MIDI_SOURCES.items():
+				url = self.F_MIDI_SOURCE_URL.format(path=path, series=series)
+				with urllib.request.urlopen(url, timeout=30) as response:
+					data = response.read()
+				if not data:
+					raise RuntimeError(f"{name} downloaded empty from {url}")
+				with open(os.path.join(build_dir, name), "wb") as f:
+					f.write(data)
+		except Exception as e:
+			print(f"f_midi: could not download sources — {e}")
+			shutil.rmtree(build_dir, ignore_errors=True)
+			return None
+
+		source_path = os.path.join(build_dir, "f_midi.c")
+		with open(source_path, "r") as f:
+			source = f.read()
+		stock = f'"{self.F_MIDI_STOCK_NAME}"'
+		count = source.count(stock)
+		if count != 1:
+			# Upstream changed the string. Building anyway would silently bring
+			# back the generic port name, so stop and say why.
+			print(f"f_midi: expected exactly one {stock} in f_midi.c, found {count}. "
+			      "Upstream has changed — the name patch needs updating.")
+			shutil.rmtree(build_dir, ignore_errors=True)
+			return None
+		with open(source_path, "w") as f:
+			f.write(source.replace(stock, f'"{self.F_MIDI_INTERFACE_NAME}"'))
+		print(f"f_midi: port name patched to '{self.F_MIDI_INTERFACE_NAME}'.")
+
+		with open(os.path.join(build_dir, "Kbuild"), "w") as f:
+			f.write("obj-m := usb_f_midi.o\nusb_f_midi-y := f_midi.o\n")
+
+		try:
+			subprocess.check_call(["make", "-C", headers, f"M={build_dir}", "modules"])
+		except subprocess.CalledProcessError as e:
+			print(f"f_midi: build failed — {e}")
+			shutil.rmtree(build_dir, ignore_errors=True)
+			return None
+
+		built = os.path.join(build_dir, "usb_f_midi.ko")
+		if not self._f_midi_module_ok(built, kernel_ver):
+			print("f_midi: the built module failed its own checks — not installing it.")
+			shutil.rmtree(build_dir, ignore_errors=True)
+			return None
+		return built
+
+	@staticmethod
+	def _install_f_midi(module: str, install_dir: str, install_path: str) -> None:
+		print(f"f_midi: installing to {install_path}...")
+		subprocess.check_call(["sudo", "mkdir", "-p", install_dir])
+		subprocess.check_call(["sudo", "cp", module, install_path])
+		subprocess.check_call(["sudo", "depmod", "-a"])
+
+	def _disable_l4t_usb_device_mode(self) -> None:
+		"""Stop NVIDIA's USB device-mode gadget from claiming the UDC.
+
+		Masked rather than just disabled: a JetPack upgrade re-enables a
+		disabled unit (that is how MIDI broke after the last apt upgrade), but
+		it cannot enable a masked one.
+		"""
+		service = self.L4T_USB_DEVICE_MODE_SERVICE
+		result = subprocess.run(
+			["systemctl", "list-unit-files", service],
+			capture_output=True, text=True,
+		)
+		if service not in result.stdout:
+			return
+		state = subprocess.run(
+			["systemctl", "is-enabled", service], capture_output=True, text=True,
+		).stdout.strip()
+		if state == "masked":
+			print(f"f_midi: {service} already masked.")
+			return
+		print(f"f_midi: disabling and masking {service} (it holds the USB-C port MIDI needs)...")
+		subprocess.run(["sudo", "systemctl", "disable", "--now", service])
+		subprocess.check_call(["sudo", "systemctl", "mask", service])
 
 	def setup_bashrc(self) -> None:
 		"""Add required environment variables to ~/.bashrc if not already present."""
