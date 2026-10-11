@@ -1486,6 +1486,13 @@ function populateTTSInput(text) {
 
 let wifiSSIDs = [];
 let selectedSSID = null;
+let wifiScanning = false;
+let wifiScanTimer = null;
+let wifiLastScanTime = null;
+
+// A scan normally takes a few seconds. If no results arrive in this long,
+// stop showing "Scanning…" so the button doesn't stay disabled forever.
+const WIFI_SCAN_TIMEOUT_MS = 40000;
 
 function signalToLevel(signal) {
 	// Map signal strength (0-100%) to icon level, Windows-style:
@@ -1513,7 +1520,13 @@ function updateWifiIndicator(ssid, signal) {
 }
 
 socket.on('wifiScan', function(data) {
-	wifiSSIDs = data;
+	wifiSSIDs = Array.isArray(data) ? data : [];
+	wifiLastScanTime = new Date();
+	setWifiScanning(false);
+	// Redraw only if the popup is open; otherwise it's drawn on next open.
+	if (isWifiPopupOpen()) {
+		populateWifiList();
+	}
 });
 
 socket.on('wifiConnected', function(data) {
@@ -1526,6 +1539,8 @@ socket.on('wifiDisconnected', function() {
 
 socket.on('wifiPasswordRequired', function(data) {
 	alert(`Password required to connect to '${data.ssid}'. Please enter it in the WiFi popup.`);
+	// Preselect the network that was asked for, so only the password is left.
+	selectedSSID = data.ssid;
 	openWifiPopup();
 });
 
@@ -1547,6 +1562,13 @@ function setupWifiPopupEvents() {
 				openWifiPopup();
 			}
 		});
+	}
+
+	const refreshButton = document.getElementById('refreshWifiButton');
+	if (refreshButton) {
+		refreshButton.addEventListener('click', requestWifiScan);
+	} else {
+		console.warn('Refresh WiFi button not found!');
 	}
 
 	if (closePopupButton) {
@@ -1574,8 +1596,49 @@ function setupWifiPopupEvents() {
 	setupOverlayDismiss(popupOverlay, closeWifiPopup, 'WiFi Popup');
 }
 
+function isWifiPopupOpen() {
+	const popup = document.getElementById('wifiPopup');
+	return !!popup && popup.style.display !== 'none';
+}
+
+function requestWifiScan() {
+	if (wifiScanning) return;
+	setWifiScanning(true);
+	socket.emit('onWifiScan');
+}
+
+function setWifiScanning(scanning) {
+	wifiScanning = scanning;
+	clearTimeout(wifiScanTimer);
+	wifiScanTimer = null;
+	if (scanning) {
+		wifiScanTimer = setTimeout(() => setWifiScanning(false), WIFI_SCAN_TIMEOUT_MS);
+	}
+
+	const refreshButton = document.getElementById('refreshWifiButton');
+	if (refreshButton) {
+		refreshButton.disabled = scanning;
+		refreshButton.textContent = scanning ? 'Scanning…' : 'Refresh';
+	}
+	updateWifiScanStatus();
+}
+
+function updateWifiScanStatus() {
+	const status = document.getElementById('wifiScanStatus');
+	if (!status) return;
+	if (wifiScanning) {
+		status.textContent = 'Looking for networks…';
+	} else if (wifiLastScanTime) {
+		const time = wifiLastScanTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+		status.textContent = `${wifiSSIDs.length} found · updated ${time}`;
+	} else {
+		status.textContent = '';
+	}
+}
+
 function openWifiPopup() {
 	populateWifiList();
+	updateWifiScanStatus();
 	const popup = document.getElementById('wifiPopup');
 	if (popup) {
 		popup.style.display = 'flex';
@@ -1604,18 +1667,34 @@ function populateWifiList() {
 	wifiListDiv.innerHTML = '';
 
 	if (wifiSSIDs.length === 0) {
-		wifiListDiv.innerHTML = '<p style="color: #fff; text-align: center;">No WiFi networks found.</p>';
+		const empty = document.createElement('p');
+		empty.style.color = '#fff';
+		empty.style.textAlign = 'center';
+		empty.textContent = wifiScanning ? 'Scanning…' : 'No WiFi networks found.';
+		wifiListDiv.appendChild(empty);
 		return;
 	}
 
+	// Network names come from anyone in radio range, so they are inserted as
+	// text, never as HTML.
 	wifiSSIDs.forEach(ap => {
 		const wifiItem = document.createElement('div');
 		wifiItem.classList.add('wifi-item');
 		wifiItem.dataset.ssid = ap.ssid;
-		wifiItem.innerHTML = `
-			<span>${ap.ssid}</span>
-			<span>${ap.signal_strength}%</span>
-		`;
+		if (ap.ssid === selectedSSID) {
+			wifiItem.classList.add('selected');
+		}
+
+		const name = document.createElement('span');
+		name.classList.add('wifi-item-ssid');
+		name.textContent = ap.ssid;
+		name.title = ap.ssid;
+
+		const signal = document.createElement('span');
+		signal.textContent = `${ap.signal_strength}%`;
+
+		wifiItem.appendChild(name);
+		wifiItem.appendChild(signal);
 		wifiItem.addEventListener('click', () => selectWifi(ap.ssid));
 		wifiListDiv.appendChild(wifiItem);
 	});
@@ -1625,7 +1704,7 @@ function selectWifi(ssid) {
 	selectedSSID = ssid;
 	const wifiItems = document.querySelectorAll('.wifi-item');
 	wifiItems.forEach(item => {
-		item.style.backgroundColor = item.dataset.ssid === ssid ? 'rgba(255, 255, 255, 0.2)' : '';
+		item.classList.toggle('selected', item.dataset.ssid === ssid);
 	});
 }
 

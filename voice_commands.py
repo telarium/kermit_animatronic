@@ -77,10 +77,26 @@ class VoiceCommandHandler:
 		"sing the song", "play", "sing",
 	]
 
-	CONNECT_WIFI_PREFIXES = [
-		"connect to network", "connect to wifi", "log in to wifi",
-		"log in to network", "connect to", "log in to",
-	]
+	# "connect to <ssid>" and its variants. Speech-to-text routinely mangles
+	# the verb ("connects to", "connected to", "login to"), and people add
+	# filler ("please connect to the wifi called ..."), so the verb and the
+	# words between it and the network name are matched loosely.
+	_CONNECT_WIFI = re.compile(
+		r"^(?:(?:please|can you|could you|would you|hey|okay|ok|now)[ ,]+)*"
+		r"(?:connect(?:s|ed|ing)?|log(?:s|ged)? ?in|login|sign(?:s)? ?in|join(?:s|ed)?|switch(?:es)?)"
+		r"(?: yourself| us| me)?"
+		r"(?: (?:to|into|onto|on to|on))?"
+		r"(?: the)?"
+		r"(?: (?:wi ?fi|wireless|network|hotspot|access point)(?: network)?)?"
+		r"(?: (?:called|named))?"
+		r" (.+)$"
+	)
+
+	# Remainders that name no network at all ("connect to the wifi").
+	_CONNECT_WIFI_GENERIC = {
+		"wifi", "wi fi", "network", "the network", "wireless", "hotspot",
+		"the wifi", "the internet", "internet", "it", "that",
+	}
 
 	# Generic words that should NOT be treated as song names
 	PLAY_BY_NAME_BLOCKLIST = {
@@ -140,7 +156,6 @@ class VoiceCommandHandler:
 			for phrase in phrases
 		]
 		self._sorted_prefixes = sorted(self.PLAY_BY_NAME_PREFIXES, key=len, reverse=True)
-		self._sorted_connect_prefixes = sorted(self.CONNECT_WIFI_PREFIXES, key=len, reverse=True)
 		# Lazily built index of (normalized key -> original show stem). Rebuilt
 		# whenever show_list changes, since inserting a USB stick adds shows at
 		# runtime. _resolve_show needs the ORIGINAL stem back to find the file,
@@ -214,15 +229,21 @@ class VoiceCommandHandler:
 
 	def _match_connect_wifi(self, text: str) -> str | None:
 		"""
-		If the transcript starts with a connect-wifi prefix and has a meaningful
+		If the transcript is a connect-wifi request with a meaningful
 		remainder, return the remainder as the SSID. Otherwise return None.
 		"""
-		for prefix in self._sorted_connect_prefixes:
-			if text.startswith(prefix + " ") or text == prefix:
-				remainder = text[len(prefix):].strip()
-				if remainder:
-					return remainder
-		return None
+		# Hyphens and stray punctuation become spaces so "Wi-Fi" and "log-in"
+		# read the same as "wi fi" and "log in". The SSID itself is fuzzy
+		# matched against the scan later, so nothing is lost here.
+		cleaned = re.sub(r"[^\w' ]+", " ", text)
+		cleaned = re.sub(r"\s+", " ", cleaned).strip()
+		match = self._CONNECT_WIFI.match(cleaned)
+		if not match:
+			return None
+		remainder = match.group(1).strip()
+		if not remainder or remainder in self._CONNECT_WIFI_GENERIC:
+			return None
+		return remainder
 
 	def _dispatch_intent(self, intent: str) -> None:
 		handlers = {

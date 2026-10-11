@@ -199,6 +199,8 @@ class Kermit:
 		dispatcher.connect(self.on_show_status, signal='showStatus', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_to_wifi_network, signal='connectToWifi', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_scan_complete, signal='wifiScanComplete', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_scan_requested, signal='wifiScanRequested', sender=dispatcher.Any)
+		dispatcher.connect(self.on_wifi_password_required, signal='wifiPasswordRequired', sender=dispatcher.Any)
 		dispatcher.connect(self.on_wifi_connected, signal='wifiConnected', sender=dispatcher.Any)
 		dispatcher.connect(self.on_config_save, signal='configSave', sender=dispatcher.Any)
 		dispatcher.connect(self.on_convert_show, signal='convertShow', sender=dispatcher.Any)
@@ -456,6 +458,7 @@ class Kermit:
 			self.movements.reset_all()
 			return
 		log.info(f"Heard: {text}")
+		audio_setup.wake_dac_if_needed(pygame)
 		if not self.voiceCommandHandler.parse(text, followup=self._awaiting_followup):
 			self._awaiting_followup = False
 			self.llm.send(text)
@@ -532,6 +535,15 @@ class Kermit:
 
 	def on_connect_to_wifi_network(self, ssid: str, password: any = None) -> None:
 		self.wifi_management.connect(ssid, password if password else None)
+
+	def on_wifi_scan_requested(self) -> None:
+		self.wifi_management.scan()
+
+	def on_wifi_password_required(self, ssid: str) -> None:
+		# A spoken "connect to X" for a network NM has no saved password for
+		# can't finish by voice — hand it to the web UI to ask for one.
+		log.info(f"WiFi: password required for '{ssid}'")
+		self.web_server.broadcast('wifiPasswordRequired', {'ssid': ssid})
 
 	def on_wifi_scan_complete(self, networks: list) -> None:
 		self.wifi_access_points = networks

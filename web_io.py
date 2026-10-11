@@ -123,6 +123,11 @@ class WebServer:
 	def connect_to_wifi(data: dict) -> None:
 		dispatcher.send(signal="connectToWifi", ssid=data["ssid"], password=data["password"])
 
+	@socketio.on('onWifiScan')
+	def wifi_scan_event() -> None:
+		"""Refresh button in the WiFi popup. Results come back as 'wifiScan'."""
+		dispatcher.send(signal="wifiScanRequested")
+
 	@socketio.on('onWebTextSubmit')
 	def web_text_submit(data: Any) -> None:
 		"""Typed text from the web UI. As a command it takes the same path a
