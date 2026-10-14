@@ -184,6 +184,7 @@ class Kermit:
 
 	def set_dispatch_events(self) -> None:
 		dispatcher.connect(self.on_update_status, signal='updateStatus', sender=dispatcher.Any)
+		dispatcher.connect(self.on_mic_connection_changed, signal='micConnectionChanged', sender=dispatcher.Any)
 		dispatcher.connect(self.on_connect_event, signal='connectEvent', sender=dispatcher.Any)
 		dispatcher.connect(self.on_movement_key_activated, signal='onMovementKeyActivated', sender=dispatcher.Any)
 		dispatcher.connect(self.load_config, signal='usbAttached', sender=dispatcher.Any)
@@ -426,6 +427,9 @@ class Kermit:
 		self.web_server.broadcast('configLoaded', self._config_data)
 		self.web_server.broadcast('keyMapLoaded', self._key_map)
 		self.on_update_status(self._prev_status_id, self._prev_status_value)
+		mic_connected = mic_stream.is_connected()
+		if mic_connected is not None:
+			self.on_mic_connection_changed(mic_connected)
 		current_ssid = self.wifi_management.get_current_ssid()
 		if current_ssid:
 			match = next((n for n in (self.wifi_access_points or []) if n['ssid'] == current_ssid), None)
@@ -525,6 +529,11 @@ class Kermit:
 		self._prev_status_id = id
 		self._prev_status_value = value
 		self.web_server.broadcast('statusUpdate', {"id": id, "value": value})
+
+	def on_mic_connection_changed(self, connected: bool) -> None:
+		"""The ReSpeaker started or stopped delivering audio. Shown as a
+		warning in the status card while it is missing."""
+		self.web_server.broadcast('micStatus', {"connected": bool(connected)})
 
 	def on_web_tts_event(self, val: any) -> None:
 		dispatcher.send(signal="voiceInputEvent", id="ttsSubmitted")
