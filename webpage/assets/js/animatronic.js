@@ -85,6 +85,23 @@ function updateStatus(id, value) {
 
 socket.on('statusUpdate', ({ id, value }) => updateStatus(id, value));
 
+/**
+ * Show or hide the "microphone not connected" warning in the status card.
+ * The server only reports the mic missing after it has been gone for a
+ * while, so a brief drop doesn't flash the warning.
+ * @param {boolean} connected - Whether the mic is delivering audio.
+ */
+function setMicStatus(connected) {
+	const element = document.getElementById('micStatus');
+	if (element) {
+		element.hidden = !!connected;
+	} else {
+		console.warn('Mic status element not found!');
+	}
+}
+
+socket.on('micStatus', ({ connected }) => setMicStatus(connected));
+
 // -------------------------------------------------------------------------
 // Config editor
 // -------------------------------------------------------------------------
@@ -182,6 +199,19 @@ socket.on('restoreBackupResult', (result) => {
 		setConfigSaveStatus(`Restore failed: ${message}`, 'error');
 	}
 });
+
+/**
+ * Download the animatronic's log as a file. The server sends it as an
+ * attachment, so following the link saves it without leaving the page.
+ */
+function downloadLog() {
+	const link = document.createElement('a');
+	link.href = '/downloadLog';
+	link.download = '';
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+}
 
 function setConfigSaveStatus(message, cls) {
 	const status = document.getElementById('configSaveStatus');
@@ -378,6 +408,7 @@ function setupConfigPopupEvents() {
 	const closeButton = document.getElementById('closeConfigPopup');
 	const saveButton = document.getElementById('saveConfigButton');
 	const restoreButton = document.getElementById('restoreBackupButton');
+	const downloadLogButton = document.getElementById('downloadLogButton');
 	const popupOverlay = document.getElementById('configPopup');
 
 	if (indicator) {
@@ -405,6 +436,12 @@ function setupConfigPopupEvents() {
 		restoreButton.addEventListener('click', restoreBackupToUSB);
 	} else {
 		console.warn('Restore Backup Button not found!');
+	}
+
+	if (downloadLogButton) {
+		downloadLogButton.addEventListener('click', downloadLog);
+	} else {
+		console.warn('Download Log Button not found!');
 	}
 
 	setupOverlayDismiss(popupOverlay, closeConfigPopup, 'Config Popup');

@@ -167,6 +167,17 @@ hr {
     font-weight: bold;
 }
 
+/* Shown only while the ReSpeaker is missing (see setMicStatus). */
+#micStatus {
+    margin-top: 0.5em;
+    color: #ff8a80;
+    font-weight: bold;
+}
+
+#micStatus[hidden] {
+    display: none;
+}
+
 /* =========================================================
    TTS input row
    ========================================================= */
@@ -579,6 +590,11 @@ hr {
 }
 
 #restoreBackupButton {
+    width: 100%;
+    margin-top: 0.75em;
+}
+
+#downloadLogButton {
     width: 100%;
     margin-top: 0.75em;
 }

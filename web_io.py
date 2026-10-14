@@ -1,12 +1,15 @@
+import io
 import os
 import socket
 import threading
+import time
 import logging
-from flask import Flask, jsonify, request, Response, send_from_directory
+from flask import Flask, jsonify, request, Response, send_file, send_from_directory
 from flask_socketio import SocketIO
 from pydispatch import dispatcher
 from typing import Any
 import utils
+import logger
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -72,6 +75,42 @@ class WebServer:
 		if not names:
 			return Response("No documentation found.", status=404, mimetype='text/plain')
 		return send_from_directory(docs_dir, names[0])
+
+	@app.route('/downloadLog')
+	def download_log() -> Response:
+		"""Send the local log as a file download, oldest entries first.
+
+		Flushes the in-memory buffer first so the download includes the last
+		few seconds, then takes a snapshot in memory: the file keeps growing
+		while it's being sent, and streaming it directly would make the
+		download's length disagree with its header."""
+		logger.flush()
+		log_path = os.path.join(_BASE_DIR, logger.LOG_DIRNAME, logger.LOG_FILENAME)
+
+		parts = []
+		# The rotated backup holds the entries before the current file.
+		for path in (log_path + '.1', log_path):
+			try:
+				with open(path, 'rb') as f:
+					parts.append(f.read())
+			except FileNotFoundError:
+				continue
+			except OSError as e:
+				log.warning(f"Log download: could not read '{path}': {e}")
+		if not parts:
+			return Response("No log file found.", status=404, mimetype='text/plain')
+
+		# Strip NUL bytes left behind if the file was ever truncated while
+		# open, so the download opens as plain text everywhere.
+		data = b''.join(parts).replace(b'\x00', b'')
+		host = socket.gethostname() or 'animatronic'
+		name = f"{host}-log-{time.strftime('%Y-%m-%d-%H%M')}.log"
+		log.info(f"Log download: sending {len(data)} bytes as {name}")
+
+		response = send_file(io.BytesIO(data), mimetype='text/plain',
+		                     as_attachment=True, download_name=name)
+		response.headers['Cache-Control'] = 'no-store'
+		return response
 
 	@app.route('/uploadShow', methods=['POST'])
 	def upload_show() -> Response:

@@ -53,6 +53,7 @@
                 <!-- Voice Command Status + TTS Input -->
                 <div class="card" id="status-card">
                     <p id="voiceCommandStatus">Voice Command Status: <span>---</span></p>
+                    <p id="micStatus" role="status" hidden>Microphone not connected — voice commands are unavailable.</p>
                     <div id="ttsInputContainer">
                         <input type="text" id="ttsInput" placeholder="Type something to say…" />
                         <button id="submitTTSButton" type="button">Speak</button>
@@ -173,6 +174,7 @@
                 <div id="configSaveStatus" aria-live="polite"></div>
                 <button id="saveConfigButton" type="button">Save</button>
                 <button id="restoreBackupButton" type="button">Restore backup to USB drive</button>
+                <button id="downloadLogButton" type="button">Download log</button>
             </div>
         </div>
 
