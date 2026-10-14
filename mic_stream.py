@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 from typing import Optional
+from pydispatch import dispatcher
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -91,6 +92,13 @@ _WATCHDOG_STATE_FILE = os.path.join(
 	os.path.dirname(os.path.abspath(__file__)), "logs", ".mic_watchdog_reboots"
 )
 
+# Connection status for the web UI. The mic is reported missing only after
+# this long without audio, so the routine ~20s recovery from a ReSpeaker drop
+# doesn't flash a warning. It is reported back the moment audio flows again.
+_MIC_MISSING_GRACE = 30.0
+# How often the monitor thread wakes. Status changes are noticed within this.
+_MONITOR_POLL = 2.0
+
 _mic_lock = threading.Lock()
 _mic = None
 
@@ -135,7 +143,11 @@ class _MicStream:
 		self._healthy_since: Optional[float] = None
 		# When the USB hub thread was first seen stuck (None = not stuck).
 		self._hub_stuck_since: Optional[float] = None
-		self._watchdog: Optional[threading.Thread] = None
+		self._monitor: Optional[threading.Thread] = None
+		# Whether the mic is delivering audio, as last reported to the web UI.
+		# None until the first report.
+		self._connected: Optional[bool] = None
+		self._connected_lock = threading.Lock()
 		# Gate for the animatronic's own voice. The stream stays open (arecord must keep
 		# being drained or its pipe fills and it dies) but captured audio is
 		# discarded rather than buffered or delivered.
@@ -150,9 +162,9 @@ class _MicStream:
 		self._last_audio = time.monotonic()
 		self._thread = threading.Thread(target=self._reader, daemon=True)
 		self._thread.start()
-		if _WATCHDOG_ENABLED and not (self._watchdog and self._watchdog.is_alive()):
-			self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
-			self._watchdog.start()
+		if not (self._monitor and self._monitor.is_alive()):
+			self._monitor = threading.Thread(target=self._monitor_loop, daemon=True)
+			self._monitor.start()
 
 	def stop(self) -> None:
 		self._stop.set()
@@ -267,6 +279,8 @@ class _MicStream:
 					# Audio is flowing. Recorded before the mute check: muted
 					# audio still proves the device and USB path are alive.
 					self._last_audio = time.monotonic()
+					if self._connected is not True:
+						self._set_connected(True)
 
 					if failures and time.monotonic() - opened_at >= _STABLE_SECONDS:
 						log.info(f"Mic: capture stable again after {failures} failed attempt(s).")
@@ -328,17 +342,46 @@ class _MicStream:
 
 		log.info("Mic: shared capture stopped.")
 
-	# -- watchdog --
+	# -- connection status --
 
-	def _watchdog_loop(self) -> None:
-		"""Reboot the system if the mic has been silent for _WATCHDOG_TIMEOUT.
+	def _set_connected(self, connected: bool) -> None:
+		"""Record and announce a change in whether the mic is delivering audio."""
+		with self._connected_lock:
+			if self._connected is connected:
+				return
+			self._connected = connected
+		if connected:
+			log.info("Mic: ReSpeaker connected — audio flowing.")
+		else:
+			log.warning(f"Mic: ReSpeaker not connected — no audio for "
+				f"{_MIC_MISSING_GRACE:.0f}s.")
+		# Announced from a short-lived thread so the reader never waits on the
+		# web server while arecord's pipe is filling.
+		threading.Thread(
+			target=_announce_connected, args=(connected,), daemon=True
+		).start()
+
+	def is_connected(self) -> Optional[bool]:
+		return self._connected
+
+	# -- monitor: status + watchdog --
+
+	def _monitor_loop(self) -> None:
+		"""Report mic connection changes, and reboot the system if USB has
+		wedged (see _WATCHDOG_TIMEOUT / _HUB_STUCK_TIMEOUT).
 
 		Runs in its own thread so it still fires when the reader thread is
 		blocked inside a stuck arecord read.
 		"""
-		while not self._stop.wait(_WATCHDOG_POLL):
+		while not self._stop.wait(_MONITOR_POLL):
 			now = time.monotonic()
 			silent_for = now - self._last_audio
+
+			if silent_for >= _MIC_MISSING_GRACE and self._connected is not False:
+				self._set_connected(False)
+
+			if not _WATCHDOG_ENABLED:
+				continue
 
 			if silent_for < _WATCHDOG_POLL * 2:
 				# Healthy. After a sustained healthy stretch, clear the
@@ -385,6 +428,13 @@ class _MicStream:
 				f"{_WATCHDOG_MAX_REBOOTS}).")
 			_reboot_system()
 			return
+
+
+def _announce_connected(connected: bool) -> None:
+	try:
+		dispatcher.send(signal="micConnectionChanged", connected=connected)
+	except Exception as e:
+		log.warning(f"Mic: could not announce connection status: {e}")
 
 
 def _usb_hub_stuck() -> bool:
@@ -492,6 +542,12 @@ def set_muted(muted: bool) -> None:
 	microphone stays deaf. Unmuting flushes all buffered audio.
 	"""
 	_get_mic().set_muted(muted)
+
+
+def is_connected() -> Optional[bool]:
+	"""Whether the mic is delivering audio: True, False, or None if the
+	stream hasn't started or hasn't settled yet."""
+	return _mic.is_connected() if _mic is not None else None
 
 
 def stop() -> None:
