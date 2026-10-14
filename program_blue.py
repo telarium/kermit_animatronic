@@ -41,6 +41,7 @@ Dispatched signals:
 	                       kwargs: channel (int, 0-15), val (int, 0 or 1)
 """
 
+import errno
 import re
 import threading
 import time
@@ -159,8 +160,16 @@ class ProgramBlue:
 			self._available = False
 			if not self._reported_missing:
 				self._reported_missing = True
-				log.exception(f"ProgramBlue: could not open {self._port} — {e}. "
-				      f"Retrying every {RECONNECT_INTERVAL:.0f}s.")
+				if getattr(e, "errno", None) == errno.ENOENT:
+					# The normal case: no adapter plugged in. Not an error, and
+					# a traceback would only bury the log lines that matter.
+					log.info(f"ProgramBlue: no serial adapter at {self._port} — "
+						f"will connect when one is plugged in.")
+				else:
+					# Present but unusable (permissions, busy, bad driver).
+					# Worth flagging, but the message says it all.
+					log.warning(f"ProgramBlue: could not open {self._port} — {e}. "
+						f"Retrying every {RECONNECT_INTERVAL:.0f}s.")
 			return False
 
 	def _handle_disconnect(self, why: str) -> None:
